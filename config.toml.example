@@ -1,0 +1,17 @@
+[boostboard]
+relay_addr = "wss://relay.nostr.band"
+pubkey = "abcdef..."
+
+[zaps]
+relay_addrs = ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.nostr.band"]
+naddr = "naddr1qq9rzdesxvcnzwfjxgcsyg9e6qkt3lw7kxghq8kqvj8r0mgldta6yclqqc8uqcye5c59r5j7qspsgqqqwensfzsd4h"
+
+[nwc]
+uri = "nostr+walletconnect://abcdef..."
+
+[osc]
+address = "127.0.0.1:7700"
+
+[wled]
+host = "192.168.2.114"
+playlist = "BOOST"
