@@ -1,7 +1,6 @@
 use nostr_sdk::Timestamp;
-
 use std::error::Error;
-
+use tokio::time::{sleep, Duration};
 use tokio;
 
 mod boostboard;
@@ -13,18 +12,50 @@ mod wled;
 mod zaps;
 
 
-pub async fn trigger_effects(config: config::Config, sats: i64) -> Result<(), Box<dyn Error>> {
+async fn setup_effects(config: config::Config) -> Result<(), Box<dyn Error>> {
+
+    if let Some(wled) = &config.wled {
+        if !wled.setup {
+            return Ok(()); // setup not requested
+        }
+
+        if let Some(presets) = &wled.presets {
+            for preset in presets {
+                let _ = wled::set_preset(&wled.host, &wled, &preset).await;
+                sleep(Duration::from_millis(500)).await;
+            }
+        }
+
+        if let Some(playlists) = &wled.playlists {
+            for playlist in playlists {
+                let _ = wled::set_playlist(&wled.host, &playlist).await;
+                sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn trigger_effects(config: config::Config, sats: i64) -> Result<(), Box<dyn Error>> {
 
     if let Some(cfg) = config.wled {
-        let playlist = wled::get_playlist(&cfg.host, cfg.playlist.clone()).await?;
+        let satstr = sats.to_string().chars().last().unwrap();
+        let endnum_playlist = format!("BOOST-{}", satstr);
+
+        let mut playlist = wled::get_preset(&cfg.host, endnum_playlist.clone()).await?;
+
+        if playlist.is_none() {
+            playlist = wled::get_preset(&cfg.host, cfg.boost_playlist.clone()).await?;
+        }
 
         if playlist.is_some() {
             let playlist = playlist.unwrap();
             println!("Triggering WLED playlist {}", playlist.name);
-            wled::run_playlist(cfg.host, playlist).await?;
+            wled::run_preset(cfg.host, playlist).await?;
         }
         else {
-            eprintln!("Unable to find WLED playlist matching: {}", cfg.playlist.clone());
+            eprintln!("Unable to find WLED playlist matching {} or {}", endnum_playlist, cfg.boost_playlist.clone());
         }
     }
 
@@ -130,6 +161,8 @@ async fn main() {
 
     let config = config::load_config().expect("Unable to load config");
     let mut tasks = Vec::new();
+
+    let _ = setup_effects(config.clone()).await;
 
     if config.zaps.is_some() {
         tasks.push(tokio::spawn(listen_for_zaps(config.clone())));

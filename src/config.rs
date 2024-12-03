@@ -37,7 +37,34 @@ pub struct OSC {
 #[derive(Deserialize, Debug, Clone)]
 pub struct WLed {
     pub host: String,
-    pub playlist: String,
+    pub boost_playlist: String,
+    pub brightness: u64,
+    pub leds: Option<u64>,
+    pub segments: Option<u64>,
+    pub presets: Option<Vec<WLedPreset>>,
+    pub playlists: Option<Vec<WLedPlaylist>>,
+    pub setup: bool,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct WLedPreset {
+    pub id: u64,
+    pub name: String,
+    pub effect: Option<u64>,
+    pub speed: Option<u64>,
+    pub intensity: Option<u64>,
+    pub colors: Vec<Vec<u64>>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct WLedPlaylist {
+    pub id: u64,
+    pub name: String,
+    pub presets: Vec<u64>,
+    pub durations: Vec<u64>,
+    pub transitions: Vec<u64>,
+    pub repeat: u64,
+    pub end: u64,
 }
 
 pub fn load_config() -> Result<Config, Box<dyn Error>> {
