@@ -15,3 +15,38 @@ address = "127.0.0.1:7700"
 [wled]
 host = "192.168.2.114"
 playlist = "BOOST"
+leds = 75
+segments = 3
+brightness = 128
+setup = false
+
+[[wled.presets]]
+id = 10
+name = "Preset 1"
+colors = [[157,59,224],[0,0,0],[0,0,0]]
+
+[[wled.presets]]
+id = 11
+name = "Preset 2"
+colors = [[157,59,224],[126,217,86],[0,0,0]]
+
+[[wled.presets]]
+id = 12
+name = "Preset 3"
+colors = [[157,59,224],[126,217,86],[208,40,37]]
+
+[[wled.presets]]
+id = 13
+name = "Preset Anim"
+colors = [[157,59,224],[126,217,86],[208,40,37]]
+effect = 39
+speed = 255
+
+[[wled.playlists]]
+id = 50
+name = "Preset Playlist"
+presets = [10, 11, 12, 13]
+durations = [10, 10, 10, 30]
+transitions = [7, 7, 7, 0]
+repeat = 1
+end = 3
