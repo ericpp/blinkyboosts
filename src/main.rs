@@ -128,7 +128,7 @@ async fn listen_for_boostboard(config: config::Config) {
 
 async fn listen_for_nwc(config: config::Config) {
     let cfg = config.nwc.clone().unwrap();
-    let nwc = nwc::NWC::new(&cfg.uri).expect("Failed to create NWC");
+    let nwc = nwc::NWC::new(&cfg.uri).await.expect("Failed to create NWC");
 
     println!("Waiting for NWC boosts...");
 
