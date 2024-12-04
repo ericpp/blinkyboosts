@@ -73,7 +73,7 @@ impl NWC {
         client.add_relay(uri.relay_url.clone()).await?;
 
         client.connect().await;
-        println!("Connected to relay {}", &uri);
+        println!("Connected to NWC relay {}", &uri.relay_url);
 
         Ok(Self {
             client,
