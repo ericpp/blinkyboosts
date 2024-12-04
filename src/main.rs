@@ -39,23 +39,33 @@ async fn setup_effects(config: config::Config) -> Result<(), Box<dyn Error>> {
 
 async fn trigger_effects(config: config::Config, sats: i64) -> Result<(), Box<dyn Error>> {
 
-    if let Some(cfg) = config.wled {
-        let satstr = sats.to_string().chars().last().unwrap();
-        let endnum_playlist = format!("BOOST-{}", satstr);
+    println!("Triggering effects for {} sats", sats);
 
-        let mut playlist = wled::get_preset(&cfg.host, endnum_playlist.clone()).await?;
+    if let Some(cfg) = config.wled {
+        let number_playlist = format!("BOOST-{}", sats);
+
+        let endnum = sats.to_string().chars().last().unwrap();
+        let endnum_playlist = format!("BOOST-{}", endnum);
+
+        // find playlist matching boost amount
+        let mut playlist = wled::get_preset(&cfg.host, number_playlist.clone()).await?;
 
         if playlist.is_none() {
+            // find playlist matching end number
+            playlist = wled::get_preset(&cfg.host, endnum_playlist.clone()).await?;
+        }
+
+        if playlist.is_none() {
+            // find general boost playlist
             playlist = wled::get_preset(&cfg.host, cfg.boost_playlist.clone()).await?;
         }
 
-        if playlist.is_some() {
-            let playlist = playlist.unwrap();
+        if let Some(playlist) = playlist {
             println!("Triggering WLED playlist {}", playlist.name);
             wled::run_preset(cfg.host, playlist).await?;
         }
         else {
-            eprintln!("Unable to find WLED playlist matching {} or {}", endnum_playlist, cfg.boost_playlist.clone());
+            eprintln!("Unable to find WLED playlist matching {}, {}, or {}", number_playlist, endnum_playlist, cfg.boost_playlist.clone());
         }
     }
 
