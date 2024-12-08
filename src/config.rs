@@ -39,32 +39,40 @@ pub struct WLed {
     pub host: String,
     pub boost_playlist: String,
     pub brightness: u64,
-    pub leds: Option<u64>,
-    pub segments: Option<u64>,
+    pub segments: Option<Vec<WLedSegment>>,
     pub presets: Option<Vec<WLedPreset>>,
     pub playlists: Option<Vec<WLedPlaylist>>,
     pub setup: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct WLedPreset {
-    pub id: u64,
+pub struct WLedSegment {
     pub name: String,
-    pub effect: Option<u64>,
+    pub start: u64,
+    pub stop: u64,
+    pub reverse: Option<bool>,
+    pub grouping: Option<u64>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct WLedPreset {
+    pub name: String,
     pub speed: Option<u64>,
     pub intensity: Option<u64>,
     pub colors: Vec<Vec<u64>>,
+    pub colors2: Option<Vec<Vec<u64>>>,
+    pub colors3: Option<Vec<Vec<u64>>>,
+    pub effects: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct WLedPlaylist {
-    pub id: u64,
     pub name: String,
-    pub presets: Vec<u64>,
+    pub presets: Vec<String>,
     pub durations: Vec<u64>,
     pub transitions: Vec<u64>,
     pub repeat: u64,
-    pub end: u64,
+    pub end: String,
 }
 
 pub fn load_config() -> Result<Config, Box<dyn Error>> {

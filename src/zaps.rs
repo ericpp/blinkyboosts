@@ -2,7 +2,7 @@ use lightning_invoice::Bolt11Invoice;
 
 use nostr_sdk::nips::nip01::Coordinate;
 use nostr_sdk::prelude::Output;
-use nostr_sdk::{Timestamp, Client, Options, Filter, Kind, SubscriptionId, RelayPoolNotification, JsonUtil, TagKind};
+use nostr_sdk::{Timestamp, Client, Options, Filter, Kind, SubscriptionId, RelayPoolNotification, TagKind};
 
 use serde::{Serialize, Deserialize};
 use serde_json::Value;

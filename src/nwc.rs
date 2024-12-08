@@ -26,35 +26,35 @@ pub struct NWC {
 
 #[derive(Deserialize, Debug)]
 pub struct GetInfoResult {
-    pub alias: String,
-    pub color: String,
-    pub pubkey: String,
-    pub network: String,
-    pub block_height: u64,
+    // pub alias: String,
+    // pub color: String,
+    // pub pubkey: String,
+    // pub network: String,
+    // pub block_height: u64,
     // pub block_hash: String,
-    pub methods: Vec<String>,
+    // pub methods: Vec<String>,
     pub notifications: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct PayNotification {
-    pub r#type: String,
-    pub invoice: String,
-    pub description: String,
-    pub description_hash: String,
-    pub preimage: String,
-    pub payment_hash: String,
-    pub amount: u64,
-    pub fees_paid: u64,
-    pub created_at: u64,
-    pub expires_at: Option<u64>,
-    pub settled_at: Option<u64>,
+    // pub r#type: String,
+    // pub invoice: String,
+    // pub description: String,
+    // pub description_hash: String,
+    // pub preimage: String,
+    // pub payment_hash: String,
+    // pub amount: u64,
+    // pub fees_paid: u64,
+    // pub created_at: u64,
+    // pub expires_at: Option<u64>,
+    // pub settled_at: Option<u64>,
     pub metadata: Option<PayNotificationMetadata>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct PayNotificationMetadata {
-    pub destination: String,
+    // pub destination: String,
     pub tlv_records: Vec<TlvRecord>,
 }
 
