@@ -45,18 +45,34 @@ enum JsonSegmentEnum {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct JsonSegment {
-    pub n: String,
-    pub start: Option<u64>,
-    pub stop: Option<u64>,
-    pub rev: bool,
+    pub id: u64,
+    pub start: u64,
+    pub stop: u64,
     pub grp: u64,
+    pub spc: u64,
+    pub of: u64,
+    pub on: bool,
+    pub frz: bool,
+    pub bri: u64,
+    pub cct: u64,
+    pub set: u64,
+    pub n: String,
+    pub col: Vec<Vec<u64>>,
     pub fx: u64,
     pub sx: u64,
     pub ix: u64,
-    pub col: Vec<Vec<u64>>,
-    pub frz: bool,
-    pub bri: u64,
+    pub pal: u64,
+    pub c1: u64,
+    pub c2: u64,
+    pub c3: u64,
     pub sel: bool,
+    pub rev: bool,
+    pub mi: bool,
+    pub o1: bool,
+    pub o2: bool,
+    pub o3: bool,
+    pub si: u64,
+    pub m12: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -146,42 +162,63 @@ impl WLed {
 
         let mut segs = vec![];
 
-        for s in 0..preset.colors.len() {
-            let segment = segments[s].clone();
-            let pset = preset.clone();
+        for s in 0..32 {
+            if s < preset.colors.len() {
+                let segment = segments[s].clone();
+                let pset = preset.clone();
 
-            let colors1 = pset.colors[s].clone();
-            let colors2 = match &pset.colors2 {
-                Some(col) => col[s].clone(),
-                None => vec![0, 0, 0],
-            };
-            let colors3 = match &pset.colors3 {
-                Some(col) => col[s].clone(),
-                None => vec![0, 0, 0],
-            };
+                let colors1 = pset.colors[s].clone();
+                let colors2 = match &pset.colors2 {
+                    Some(col) => col[s].clone(),
+                    None => vec![0, 0, 0],
+                };
+                let colors3 = match &pset.colors3 {
+                    Some(col) => col[s].clone(),
+                    None => vec![0, 0, 0],
+                };
 
-            let effect_id = self.get_effect_id(&pset.effects[s]);
+                let effect_id = self.get_effect_id(&pset.effects[s]);
 
-            segs.push(JsonSegmentEnum::Segment(JsonSegment {
-                n: segment.name,
-                start: Some(segment.start),
-                stop: Some(segment.stop),
-                bri: config.brightness,
-                rev: segment.reverse.unwrap_or(false),
-                grp: segment.grouping.unwrap_or(1),
-                fx: effect_id,
-                sx: match pset.speed {
-                    Some(val) => val,
-                    None => 128,
-                },
-                ix: match pset.intensity {
-                    Some(val) => val,
-                    None => 128,
-                },
-                col: vec![colors1, colors2, colors3],
-                frz: false, // freeze
-                sel: true, // selected
-            }));
+                segs.push(JsonSegmentEnum::Segment(JsonSegment {
+                    id: s as u64,
+                    start: segment.start,
+                    stop: segment.stop,
+                    grp: segment.grouping.unwrap_or(1),
+                    spc: 0,
+                    of: 0,
+                    on: true,
+                    frz: false,
+                    bri: config.brightness,
+                    cct: 127,
+                    set: 0,
+                    n: segment.name,
+                    col: vec![colors1, colors2, colors3],
+                    fx: effect_id,
+                    sx: match pset.speed {
+                        Some(val) => val,
+                        None => 128,
+                    },
+                    ix: match pset.intensity {
+                        Some(val) => val,
+                        None => 128,
+                    },
+                    pal: 0,
+                    c1: 128,
+                    c2: 128,
+                    c3: 16,
+                    sel: true,
+                    rev: segment.reverse.unwrap_or(false),
+                    mi: false,
+                    o1: false,
+                    o2: false,
+                    o3: false,
+                    si: 0,
+                    m12: 0,
+                }));
+            }
+            else {
+                segs.push(JsonSegmentEnum::Empty { stop: 0 });
+            }
         }
 
         let json = JsonPreset {
@@ -195,14 +232,19 @@ impl WLed {
             return Ok(false);
         }
 
-        let json = json!({
+        let state = json!({
             "psave": preset_id,
-            "n": json.n,
+            "on": true,
             "bri": config.brightness,
+            "transition": 7,
+            "mainseg": 0,
             "seg": json.seg,
+            "n": json.n,
+            "ib": true,
+            "sb": true,
         });
 
-        if let Ok(()) = set_state(&self.host, json).await {
+        if let Ok(()) = set_state(&self.host, state).await {
             self.load_presets().await?;
         }
 
@@ -249,7 +291,7 @@ impl WLed {
         }
 
         // convert to state object (different than preset)
-        let json = json!({
+        let state = json!({
             "psave": preset_id,
             "on": true,
             "o": true,
@@ -258,7 +300,7 @@ impl WLed {
             "playlist": json.playlist,
         });
 
-        if let Ok(()) = set_state(&self.host, json).await {
+        if let Ok(()) = set_state(&self.host, state).await {
             self.load_presets().await?;
         }
 
