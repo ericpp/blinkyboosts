@@ -12,41 +12,374 @@ uri = "nostr+walletconnect://abcdef..."
 [osc]
 address = "127.0.0.1:7700"
 
+
 [wled]
+# host = "192.168.2.84"
 host = "192.168.2.114"
-playlist = "BOOST"
-leds = 75
-segments = 3
+boost_playlist = "BOOST"
 brightness = 128
-setup = false
+setup = true
+
+[[wled.segments]]
+name = "BOOSTAGRAM"
+start = 0
+stop = 104
+grouping = 1
+
+[[wled.segments]]
+name = "BOLT1"
+start = 104
+stop = 117
+grouping = 2
+
+[[wled.segments]]
+name = "BALL"
+start = 117
+stop = 155
+reverse = true
+grouping = 2
+
+[[wled.segments]]
+name = "BOLT2"
+start = 155
+stop = 168
+grouping = 2
+
+[[wled.segments]]
+name = "LIT"
+start = 168
+stop = 206
+grouping = 3
 
 [[wled.presets]]
-id = 10
-name = "Preset 1"
-colors = [[157,59,224],[0,0,0],[0,0,0]]
+name = "RGB 1"
+colors = [[255,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
 [[wled.presets]]
-id = 11
-name = "Preset 2"
-colors = [[157,59,224],[126,217,86],[0,0,0]]
+name = "RGB 2"
+colors = [[255,0,0],[0,0,0],[0,0,255],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
 [[wled.presets]]
-id = 12
-name = "Preset 3"
-colors = [[157,59,224],[126,217,86],[208,40,37]]
+name = "RGB 3"
+colors = [[255,0,0],[8,255,0],[0,0,255],[8,255,0],[255,170,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Freqpixels"]
 
 [[wled.presets]]
-id = 13
-name = "Preset Anim"
-colors = [[157,59,224],[126,217,86],[208,40,37]]
-effect = 39
+name = "RGB 4"
+colors = [[255,0,0],[8,255,0],[0,0,255],[8,255,0],[255,170,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 speed = 255
 
+
+[[wled.presets]]
+name = "Bowl After Bowl 1"
+colors = [[126,217,86],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq"]
+speed = 200
+
+[[wled.presets]]
+name = "Bowl After Bowl 2"
+colors = [[126,217,86],[0,0,0],[157,59,224],[0,0,0],[0,0,0]]
+effects = ["Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq"]
+
+[[wled.presets]]
+name = "Bowl After Bowl 3"
+colors = [[126,217,86],[255,160,0],[157,59,224],[255,160,0],[208,40,37]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Bowl After Bowl Anim"
+colors = [[126,217,86],[255,160,0],[157,59,224],[255,160,0],[208,40,37]]
+effects = ["Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq"]
+speed = 255
+
+
+[[wled.presets]]
+name = "Fun Fact Friday 1"
+colors = [[64,77,255],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Fun Fact Friday 2"
+colors = [[64,77,255],[0,0,0],[252,168,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Fun Fact Friday 3"
+colors = [[64,77,255],[252,168,0],[252,168,0],[252,168,0],[64,77,255]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Fun Fact Friday Anim"
+colors = [[64,77,255],[252,168,0],[252,168,0],[252,168,0],[64,77,255]]
+effects = ["Chase Random", "Chase Random", "Chase Random", "Chase Random", "Chase Random"]
+speed = 255
+
+
+[[wled.presets]]
+name = "MMO 1"
+colors = [[255,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "MMO 2"
+colors = [[255,0,0],[255,255,255],[255,255,255],[255,255,255],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "MMO 3"
+colors = [[255,0,0],[255,255,255],[255,255,255],[255,255,255],[255,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "MMO Anim"
+colors = [[255,0,0],[255,255,255],[255,255,255],[255,255,255],[255,0,0]]
+effects = ["Android", "Android", "Android", "Android", "Android"]
+speed = 255
+
+
+[[wled.presets]]
+name = "America 1"
+colors = [[255,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "America 2"
+colors = [[255,0,0],[0,0,0],[255,255,255],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "America 3"
+colors = [[255,0,0],[0,0,255],[255,255,255],[0,0,255],[0,0,255]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "America Anim"
+colors = [[255,0,0],[0,0,255],[255,255,255],[0,0,255],[0,0,255]]
+effects = ["Chase", "Chase", "Chase", "Chase", "Chase"]
+speed = 255
+
+
+[[wled.presets]]
+name = "Nick the Rat 1"
+colors = [[84,77,220],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Nick the Rat 2"
+colors = [[84,77,220],[0,0,0],[157,157,155],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Nick the Rat 3"
+colors = [[84,77,220],[169,27,85],[157,157,155],[169,27,85],[169,27,85]]
+colors2 = [[0,0,0],[255, 200, 0],[0,0,0],[255, 200, 0],[0,0,0]]
+effects = ["Solid", "Breathe", "Solid", "Breathe", "Solid"]
+speed = 0
+
+[[wled.presets]]
+name = "Nick the Rat Anim"
+colors = [[84,77,220],[169,27,0],[157,157,0],[169,27,0],[169,27,85]]
+effects = ["Sweep Random", "Sweep Random", "Sweep Random", "Sweep Random", "Sweep Random"]
+speed = 240
+
+
+[[wled.presets]]
+name = "Planet Rage 1"
+colors = [[38,81,254],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Planet Rage 2"
+colors = [[38,81,254],[192,2,1],[94,193,0],[192,2,1],[192,2,1]]
+effects = ["Strobe", "Strobe", "Strobe", "Strobe", "Strobe"]
+speed = 128
+
+[[wled.presets]]
+name = "Planet Rage 3"
+colors = [[38,81,254],[192,2,1],[94,193,0],[192,2,1],[192,2,1]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Planet Rage Anim"
+colors = [[38,81,254],[192,2,0],[94,193,0],[192,20,0],[192,2,1]]
+effects = ["Ripple Peak", "Ripple Peak", "Ripple Peak", "Ripple Peak", "Ripple Peak"]
+speed = 128
+
+
+[[wled.presets]]
+name = "Homegrown Hits 1"
+colors = [[103,66,151],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Homegrown Hits 2"
+colors = [[103,66,151],[0,0,0],[4,148,175],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Homegrown Hits 3"
+colors = [[103,66,151],[103,66,151],[4,148,175],[103,66,151],[103,66,151]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Homegrown Hits Anim"
+colors = [[103,66,151],[103,66,151],[4,148,175],[103,66,151],[103,66,151]]
+effects = ["Stream", "Stream", "Stream", "Stream", "Stream"]
+speed = 255
+
+
+[[wled.presets]]
+name = "B4TS 1"
+colors = [[41,73,255],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "B4TS 2"
+colors = [[41,73,255],[0,0,0],[255,255,255],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "B4TS 3"
+colors = [[41,73,255],[77,221,225],[255,255,255],[77,221,225],[255,117,89]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "B4TS Anim"
+colors = [[41,73,255],[77,221,225],[255,255,255],[77,221,225],[255,117,89]]
+effects = ["Dancing Shadows", "Dancing Shadows", "Dancing Shadows", "Dancing Shadows", "Dancing Shadows"]
+speed = 255
+
+
+[[wled.presets]]
+name = "Boostagram Ball 1"
+colors = [[255,38,71],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Boostagram Ball 2"
+colors = [[255,38,71],[0,0,0],[250,115,120],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Boostagram Ball 3"
+colors = [[255,38,71],[219,39,225],[250,115,120],[219,39,225],[254,181,46]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Boostagram Ball Anim"
+colors = [[255,38,71],[219,39,225],[250,115,120],[219,39,225],[254,181,46]]
+effects = ["Wavesins", "Wavesins", "Wavesins", "Wavesins", "Wavesins"]
+speed = 255
+
+
+[[wled.presets]]
+name = "Phantom Power 1"
+colors = [[222,47,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Phantom Power 2"
+colors = [[222,47,0],[0,0,0],[247,212,23],[0,0,0],[0,0,0]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Phantom Power 3"
+colors = [[222,47,0],[33,16,175],[247,212,23],[33,16,175],[33,16,175]]
+effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
+
+[[wled.presets]]
+name = "Phantom Power Anim"
+colors = [[222,47,0],[33,16,175],[247,212,23],[33,16,175],[33,16,175]]
+effects = ["Rainbow", "Rainbow", "Rainbow", "Rainbow", "Rainbow"]
+
+
 [[wled.playlists]]
-id = 50
-name = "Preset Playlist"
-presets = [10, 11, 12, 13]
-durations = [10, 10, 10, 30]
-transitions = [7, 7, 7, 0]
+name = "BOOST-0"
+presets = ["RGB 1", "RGB 2", "RGB 3", "RGB 4"]
+durations = [10, 10, 30, 10]
+transitions = [7, 7, 0, 7]
 repeat = 1
-end = 3
+end = "RGB 4"
+
+[[wled.playlists]]
+name = "BOOST-1"
+presets = ["Fun Fact Friday 1", "Fun Fact Friday 2", "Fun Fact Friday 3", "Fun Fact Friday Anim"]
+durations = [10, 10, 10, 50]
+transitions = [7, 7, 7, 7]
+repeat = 1
+end = "Fun Fact Friday 3"
+
+
+[[wled.playlists]]
+name = "BOOST-2"
+presets = ["MMO 1", "MMO 2", "MMO 3", "MMO Anim"]
+durations = [10, 10, 10, 50]
+transitions = [7, 7, 7, 7]
+repeat = 1
+end = "MMO 3"
+
+
+[[wled.playlists]]
+name = "BOOST-3"
+presets = ["Bowl After Bowl Anim", "Bowl After Bowl 3"]
+durations = [40, 50]
+transitions = [7, 7]
+repeat = 1
+end = "Bowl After Bowl 3"
+
+
+[[wled.playlists]]
+name = "BOOST-4"
+presets = ["Nick the Rat 1", "Nick the Rat 2", "Nick the Rat 3", "Nick the Rat Anim"]
+durations = [10, 10, 10, 60]
+transitions = [7, 7, 7, 7]
+repeat = 1
+end = "Nick the Rat 3"
+
+
+[[wled.playlists]]
+name = "BOOST-5"
+presets = ["Planet Rage Anim", "Planet Rage 2", "Planet Rage 3"]
+durations = [40, 20, 10]
+transitions = [7, 7, 7]
+repeat = 1
+end = "Planet Rage 3"
+
+
+[[wled.playlists]]
+name = "BOOST-6"
+presets = ["America 1", "America 2", "America 3", "America Anim"]
+durations = [10, 10, 10, 50]
+transitions = [7, 7, 7, 7]
+repeat = 1
+end = "America 3"
+
+
+[[wled.playlists]]
+name = "BOOST-7"
+presets = ["B4TS 1", "B4TS 2", "B4TS 3", "B4TS Anim"]
+durations = [10, 10, 10, 50]
+transitions = [7, 7, 7, 7]
+repeat = 1
+end = "B4TS 3"
+
+
+[[wled.playlists]]
+name = "BOOST-8"
+presets = ["Boostagram Ball 1", "Boostagram Ball 2", "Boostagram Ball 3", "Boostagram Ball Anim"]
+durations = [10, 10, 10, 50]
+transitions = [7, 7, 7, 3]
+repeat = 1
+end = "Boostagram Ball 3"
+
+
+[[wled.playlists]]
+name = "BOOST-9"
+presets = ["Phantom Power 1", "Phantom Power 2", "Phantom Power 3", "Phantom Power Anim"]
+durations = [10, 10, 10, 50]
+transitions = [7, 7, 7, 7]
+repeat = 1
+end = "Phantom Power 3"
