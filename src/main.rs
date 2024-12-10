@@ -30,15 +30,14 @@ async fn setup_effects(config: config::Config) -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(presets) = &cfg.presets {
-        // let map: HashMap<String, wled::Preset> = current_presets.into_iter().map(|ps| (ps.name.clone(), ps)).collect();
-        for preset in presets {
-            wled.set_preset(&cfg, &preset).await?;
+        for (idx, preset) in presets.into_iter().enumerate() {
+            wled.set_preset(idx, &cfg, &preset).await?;
         }
     }
 
     if let Some(playlists) = &cfg.playlists {
-        for playlist in playlists {
-            wled.set_playlist(&playlist).await?;
+        for (idx, playlist) in playlists.into_iter().enumerate() {
+            wled.set_playlist(idx, &playlist).await?;
         }
     }
 

@@ -139,8 +139,9 @@ impl WLed {
         1
     }
 
-    pub async fn set_preset(&mut self, config: &config::WLed, preset: &config::WLedPreset) -> Result<bool, Box<dyn Error>> {
-        let preset_id = self.get_preset_id(&preset.name);
+    pub async fn set_preset(&mut self, index: usize, config: &config::WLed, preset: &config::WLedPreset) -> Result<bool, Box<dyn Error>> {
+        // let preset_id = self.get_preset_id(&preset.name);
+        let preset_id = (index + 1) as u64;
         let segments = config.segments.as_ref().unwrap();
 
         let mut segs = vec![];
@@ -221,15 +222,13 @@ impl WLed {
         compare_presets(preset, exists)
     }
 
-    pub async fn set_playlist(&mut self, playlist: &config::WLedPlaylist) -> Result<bool, Box<dyn Error>> {
-        let preset_id = self.get_preset_id(&playlist.name);
+    pub async fn set_playlist(&mut self, index: usize, playlist: &config::WLedPlaylist) -> Result<bool, Box<dyn Error>> {
+        let preset_id = (index + 100) as u64;
         let end_playlist_id = self.get_preset_id(&playlist.end);
 
-        let mut presets = vec![];
-
-        for preset in &playlist.presets {
-            presets.push(self.get_preset_id(&preset));
-        }
+        let presets = playlist.presets.clone().into_iter()
+            .map(|ps| self.get_preset_id(&ps))
+            .collect();
 
         let json = JsonPreset {
             psave: Some(preset_id),
@@ -358,28 +357,21 @@ fn compare_presets(preset: &JsonPreset, compare_to: &JsonPreset) -> bool {
         return false;
     }
 
-    let mut same = true;
-
-    for (idx, item) in preset.seg.clone().into_iter().enumerate() {
-        let compare = &compare_to.seg[idx];
-        same = same && compare_segments(&item, compare);
-    }
-
-    if preset.playlist.is_some() && compare_to.playlist.is_none() {
+    if preset.seg.len() != compare_to.seg.len() {
         return false;
     }
 
-    if preset.playlist.is_none() && compare_to.playlist.is_some() {
-        return false;
-    }
-
-    if let Some(pl1) = &preset.playlist {
-        if let Some(pl2) = &compare_to.playlist {
-            same = same && compare_playlists(&pl1, &pl2);
+    for (item, compare) in preset.seg.iter().zip(compare_to.seg.iter()) {
+        if !compare_segments(&item, compare) {
+            return false;
         }
     }
 
-    same
+    match (preset.playlist.as_ref(), compare_to.playlist.as_ref()) {
+        (Some(pl1), Some(pl2)) => compare_playlists(pl1, pl2),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn compare_segments(segment: &JsonSegmentEnum, compare_to: &JsonSegmentEnum) -> bool {
@@ -408,9 +400,7 @@ fn compare_segments(segment: &JsonSegmentEnum, compare_to: &JsonSegmentEnum) -> 
         return false;
     }
 
-    for (idx, col1) in seg1.col.clone().into_iter().enumerate() {
-        let col2 = &seg2.col[idx];
-
+    for (col1, col2) in seg1.col.iter().zip(&seg2.col) {
         if col1[0] != col2[0] || col1[1] != col2[1] || col1[2] != col2[2] {
             return false;
         }
@@ -426,22 +416,35 @@ fn compare_playlists(playlist: &JsonPlaylist, compare_to: &JsonPlaylist) -> bool
         return false;
     }
 
-    let mut same = true;
-
-    for (idx, ps1) in playlist.ps.clone().into_iter().enumerate() {
-        let ps2 = compare_to.ps[idx];
-        same = same && ps1 == ps2;
+    if playlist.ps.len() != compare_to.ps.len() {
+        return false;
     }
 
-    for (idx, dur1) in playlist.dur.clone().into_iter().enumerate() {
-        let dur2 = compare_to.dur[idx];
-        same = same && dur1 == dur2;
+    for (ps1, ps2) in playlist.ps.iter().zip(compare_to.ps.iter()) {
+        if ps1 != ps2 {
+            return false;
+        }
     }
 
-    for (idx, tran1) in playlist.transition.clone().into_iter().enumerate() {
-        let tran2 = compare_to.transition[idx];
-        same = same && tran1 == tran2;
+    if playlist.dur.len() != compare_to.dur.len() {
+        return false;
     }
 
-    same
+    for (dur1, dur2) in playlist.dur.iter().zip(compare_to.dur.iter()) {
+        if dur1 != dur2 {
+            return false;
+        }
+    }
+
+    if playlist.transition.len() != compare_to.transition.len() {
+        return false;
+    }
+
+    for (tran1, tran2) in playlist.transition.iter().zip(compare_to.transition.iter()) {
+        if tran1 != tran2 {
+            return false;
+        }
+    }
+
+    true
 }
