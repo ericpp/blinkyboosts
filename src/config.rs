@@ -43,6 +43,7 @@ pub struct WLed {
     pub presets: Option<Vec<WLedPreset>>,
     pub playlists: Option<Vec<WLedPlaylist>>,
     pub setup: bool,
+    pub force: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]

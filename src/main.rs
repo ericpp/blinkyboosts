@@ -37,7 +37,7 @@ async fn setup_effects(config: config::Config) -> Result<(), Box<dyn Error>> {
 
     if let Some(playlists) = &cfg.playlists {
         for (idx, playlist) in playlists.into_iter().enumerate() {
-            wled.set_playlist(idx, &playlist).await?;
+            wled.set_playlist(idx, &cfg, &playlist).await?;
         }
     }
 

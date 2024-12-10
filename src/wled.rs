@@ -191,7 +191,7 @@ impl WLed {
             playlist: None,
         };
 
-        if self.compare_preset(&json) {
+        if !config.force && self.compare_preset(&json) {
             return Ok(false);
         }
 
@@ -222,7 +222,7 @@ impl WLed {
         compare_presets(preset, exists)
     }
 
-    pub async fn set_playlist(&mut self, index: usize, playlist: &config::WLedPlaylist) -> Result<bool, Box<dyn Error>> {
+    pub async fn set_playlist(&mut self, index: usize, config: &config::WLed, playlist: &config::WLedPlaylist) -> Result<bool, Box<dyn Error>> {
         let preset_id = (index + 100) as u64;
         let end_playlist_id = self.get_preset_id(&playlist.end);
 
@@ -244,7 +244,7 @@ impl WLed {
             }),
         };
 
-        if self.compare_preset(&json) {
+        if !config.force && self.compare_preset(&json) {
             return Ok(false);
         }
 
