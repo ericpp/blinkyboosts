@@ -7,8 +7,8 @@ use nostr_sdk::{Timestamp, Client, Options, Filter, Kind, SubscriptionId, RelayP
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 
-use std::error::Error;
 use std::future::Future;
+use anyhow::{Context, Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Zap {
@@ -24,17 +24,19 @@ pub struct Zaps {
 }
 
 impl Zaps {
-    pub async fn new(relay_addrs: &Vec<String>, naddr: &str) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(relay_addrs: &Vec<String>, naddr: &str) -> Result<Self> {
         let opts = Options::new().wait_for_send(false);
         let client = Client::builder().opts(opts).build();
 
         for relay_addr in relay_addrs {
-            client.add_relay(relay_addr).await?;
+            client.add_relay(relay_addr).await
+                .context(format!("Failed to add relay: {}", relay_addr))?;
         }
 
         client.connect().await;
 
-        let naddr: Coordinate = Coordinate::parse(naddr).unwrap();
+        let naddr: Coordinate = Coordinate::parse(naddr)
+            .context(format!("Failed to parse naddr: {}", naddr))?;
 
         Ok(Self {
             client,
@@ -42,7 +44,7 @@ impl Zaps {
         })
     }
 
-    pub async fn subscribe(&self, since: Option<Timestamp>) -> Result<SubscriptionId, Box<dyn Error>> {
+    pub async fn subscribe(&self, since: Option<Timestamp>) -> Result<SubscriptionId> {
         let ts = match since {
             Some(ts) => ts,
             None => Timestamp::from_secs(0),
@@ -54,17 +56,19 @@ impl Zaps {
             .since(ts);
 
         // Subscribe (auto generate subscription ID)
-        let Output { val: sub_id_1, .. } = self.client.subscribe(vec![subscription], None).await?;
+        let Output { val: sub_id_1, .. } = self.client.subscribe(vec![subscription], None).await
+            .context("Failed to subscribe to zaps")?;
 
         Ok(sub_id_1)
     }
 
-    pub async fn subscribe_zaps<F, Fut>(&self, since: Option<Timestamp>, func: F) -> Result<(), Box<dyn Error>>
+    pub async fn subscribe_zaps<F, Fut>(&self, since: Option<Timestamp>, func: F) -> Result<()>
     where
      F: Fn(Zap) -> Fut,
      Fut: Future<Output = ()>,
     {
-        let sub_id = self.subscribe(since).await?;
+        let sub_id = self.subscribe(since).await
+            .context("Failed to subscribe to zaps")?;
 
         // Handle subscription notifications with `handle_notifications` method
         self.client.handle_notifications(|notification| async {
@@ -121,7 +125,8 @@ impl Zaps {
             }
             Ok(false) // Set to true to exit from the loop
         })
-        .await?;
+        .await
+        .context("Failed to handle zap notifications")?;
 
         Ok(())
     }

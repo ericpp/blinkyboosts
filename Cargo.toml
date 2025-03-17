@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0"
 hex = "0.4.3"
 lightning-invoice = "0.32.0"
 nostr-sdk = "0.35.0"
@@ -13,5 +14,7 @@ rosc = "0.10.1"
 serde = "1.0.210"
 serde_derive = "1.0.215"
 serde_json = "1.0.128"
-tokio = "1.40.0"
+tokio = { version = "1.40.0", features = ["full"] }
 toml = "0.8.19"
+egui = "0.26.2"
+eframe = "0.26.2"

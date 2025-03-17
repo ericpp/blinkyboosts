@@ -1,0 +1,446 @@
+use crate::config::{Config, BoostBoard, NWC, OSC, WLed, Zaps};
+use eframe::egui;
+use egui::{Color32, RichText, Ui, ViewportBuilder};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+
+// Status enum to track component status
+#[derive(Clone, Debug, PartialEq)]
+pub enum ComponentStatus {
+    Disabled,
+    Enabled,
+    Running,
+    Error(String),
+}
+
+impl ComponentStatus {
+    pub fn color(&self) -> Color32 {
+        match self {
+            ComponentStatus::Disabled => Color32::GRAY,
+            ComponentStatus::Enabled => Color32::YELLOW,
+            ComponentStatus::Running => Color32::GREEN,
+            ComponentStatus::Error(_) => Color32::RED,
+        }
+    }
+
+    pub fn display_text(&self) -> String {
+        match self {
+            ComponentStatus::Disabled => "Disabled".to_string(),
+            ComponentStatus::Enabled => "Enabled".to_string(),
+            ComponentStatus::Running => "Running".to_string(),
+            ComponentStatus::Error(msg) => format!("Error: {}", msg),
+        }
+    }
+}
+
+// Message types for communication between GUI and background tasks
+pub enum GuiMessage {
+    UpdateStatus(String, ComponentStatus),
+    BoostReceived(String, i64),
+}
+
+// Main application state
+pub struct BlinkyBoostsApp {
+    config: Config,
+    modified_config: Config,
+    component_statuses: std::collections::HashMap<String, ComponentStatus>,
+    recent_boosts: Vec<(String, i64, Instant)>,
+    tx: mpsc::Sender<GuiMessage>,
+    rx: Arc<Mutex<mpsc::Receiver<GuiMessage>>>,
+    show_save_dialog: bool,
+    save_error: Option<String>,
+    show_settings: std::collections::HashMap<String, bool>,
+}
+
+impl BlinkyBoostsApp {
+    pub fn new(config: Config) -> Self {
+        let (tx, rx) = mpsc::channel(100);
+        
+        let mut app = BlinkyBoostsApp {
+            config: config.clone(),
+            modified_config: config,
+            component_statuses: std::collections::HashMap::new(),
+            recent_boosts: Vec::new(),
+            tx,
+            rx: Arc::new(Mutex::new(rx)),
+            show_save_dialog: false,
+            save_error: None,
+            show_settings: std::collections::HashMap::new(),
+        };
+        
+        // Initialize component statuses
+        app.component_statuses.insert("NWC".to_string(), 
+            if app.config.nwc.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
+        app.component_statuses.insert("Boostboard".to_string(), 
+            if app.config.boostboard.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
+        app.component_statuses.insert("Zaps".to_string(), 
+            if app.config.zaps.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
+        app.component_statuses.insert("WLED".to_string(), 
+            if app.config.wled.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
+        app.component_statuses.insert("OSC".to_string(), 
+            if app.config.osc.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
+        
+        // Initialize settings visibility
+        app.show_settings.insert("NWC".to_string(), false);
+        app.show_settings.insert("Boostboard".to_string(), false);
+        app.show_settings.insert("Zaps".to_string(), false);
+        app.show_settings.insert("WLED".to_string(), false);
+        app.show_settings.insert("OSC".to_string(), false);
+        
+        app
+    }
+    
+    pub fn sender(&self) -> mpsc::Sender<GuiMessage> {
+        self.tx.clone()
+    }
+    
+    fn save_config(&mut self) {
+        // Save the modified config to file
+        match toml::to_string(&self.modified_config) {
+            Ok(toml_str) => {
+                match std::fs::write("./config.toml", toml_str) {
+                    Ok(_) => {
+                        self.config = self.modified_config.clone();
+                        self.show_save_dialog = false;
+                        self.save_error = None;
+                    },
+                    Err(e) => {
+                        self.save_error = Some(format!("Failed to write config file: {}", e));
+                    }
+                }
+            },
+            Err(e) => {
+                self.save_error = Some(format!("Failed to serialize config: {}", e));
+            }
+        }
+    }
+    
+    fn process_messages(&mut self) {
+        if let Ok(mut rx) = self.rx.try_lock() {
+            while let Ok(message) = rx.try_recv() {
+                match message {
+                    GuiMessage::UpdateStatus(component, status) => {
+                        self.component_statuses.insert(component, status);
+                    },
+                    GuiMessage::BoostReceived(source, amount) => {
+                        self.recent_boosts.push((source, amount, Instant::now()));
+                    }
+                }
+            }
+        }
+        
+        // Remove boosts older than 30 seconds
+        self.recent_boosts.retain(|(_, _, time)| time.elapsed() < Duration::from_secs(30));
+    }
+    
+    fn render_component_status(&mut self, ui: &mut Ui, component: &str) {
+        let status = self.component_statuses.get(component).cloned().unwrap_or(ComponentStatus::Disabled);
+        
+        ui.horizontal(|ui| {
+            ui.label(component);
+            ui.label(RichText::new(status.display_text()).color(status.color()));
+            
+            // Toggle button
+            let is_enabled = status != ComponentStatus::Disabled;
+            if ui.button(if is_enabled { "Disable" } else { "Enable" }).clicked() {
+                match component {
+                    "NWC" => {
+                        if is_enabled {
+                            self.modified_config.nwc = None;
+                        } else if self.modified_config.nwc.is_none() {
+                            self.modified_config.nwc = Some(NWC { uri: "".to_string() });
+                        }
+                    },
+                    "Boostboard" => {
+                        if is_enabled {
+                            self.modified_config.boostboard = None;
+                        } else if self.modified_config.boostboard.is_none() {
+                            self.modified_config.boostboard = Some(BoostBoard { 
+                                relay_addr: "".to_string(),
+                                pubkey: "".to_string(),
+                            });
+                        }
+                    },
+                    "Zaps" => {
+                        if is_enabled {
+                            self.modified_config.zaps = None;
+                        } else if self.modified_config.zaps.is_none() {
+                            self.modified_config.zaps = Some(Zaps { 
+                                relay_addrs: vec!["".to_string()],
+                                naddr: "".to_string(),
+                            });
+                        }
+                    },
+                    "WLED" => {
+                        if is_enabled {
+                            self.modified_config.wled = None;
+                        } else if self.modified_config.wled.is_none() {
+                            self.modified_config.wled = Some(WLed { 
+                                host: "".to_string(),
+                                boost_playlist: "BOOST".to_string(),
+                                brightness: 128,
+                                segments: None,
+                                presets: None,
+                                playlists: None,
+                                setup: false,
+                                force: false,
+                            });
+                        }
+                    },
+                    "OSC" => {
+                        if is_enabled {
+                            self.modified_config.osc = None;
+                        } else if self.modified_config.osc.is_none() {
+                            self.modified_config.osc = Some(OSC { 
+                                address: "".to_string(),
+                            });
+                        }
+                    },
+                    _ => {}
+                }
+                
+                // Update status
+                self.component_statuses.insert(component.to_string(), 
+                    if is_enabled { ComponentStatus::Disabled } else { ComponentStatus::Enabled });
+                
+                self.show_save_dialog = true;
+            }
+            
+            // Settings button
+            if status != ComponentStatus::Disabled {
+                if ui.button("Settings").clicked() {
+                    let current = self.show_settings.get(component).cloned().unwrap_or(false);
+                    self.show_settings.insert(component.to_string(), !current);
+                }
+            }
+        });
+        
+        // Show settings if expanded
+        if *self.show_settings.get(component).unwrap_or(&false) && status != ComponentStatus::Disabled {
+            ui.indent(component, |ui| {
+                match component {
+                    "NWC" => {
+                        if let Some(nwc) = &mut self.modified_config.nwc {
+                            ui.horizontal(|ui| {
+                                ui.label("URI:");
+                                if ui.text_edit_singleline(&mut nwc.uri).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                        }
+                    },
+                    "Boostboard" => {
+                        if let Some(boostboard) = &mut self.modified_config.boostboard {
+                            ui.horizontal(|ui| {
+                                ui.label("Relay Address:");
+                                if ui.text_edit_singleline(&mut boostboard.relay_addr).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Public Key:");
+                                if ui.text_edit_singleline(&mut boostboard.pubkey).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                        }
+                    },
+                    "Zaps" => {
+                        if let Some(zaps) = &mut self.modified_config.zaps {
+                            ui.horizontal(|ui| {
+                                ui.label("NADDR:");
+                                if ui.text_edit_singleline(&mut zaps.naddr).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            
+                            ui.label("Relay Addresses:");
+                            let mut to_remove = None;
+                            for (i, addr) in zaps.relay_addrs.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    if ui.text_edit_singleline(addr).changed() {
+                                        self.show_save_dialog = true;
+                                    }
+                                    if ui.button("Remove").clicked() {
+                                        to_remove = Some(i);
+                                        self.show_save_dialog = true;
+                                    }
+                                });
+                            }
+                            
+                            if let Some(idx) = to_remove {
+                                zaps.relay_addrs.remove(idx);
+                            }
+                            
+                            if ui.button("Add Relay").clicked() {
+                                zaps.relay_addrs.push("".to_string());
+                                self.show_save_dialog = true;
+                            }
+                        }
+                    },
+                    "WLED" => {
+                        if let Some(wled) = &mut self.modified_config.wled {
+                            ui.horizontal(|ui| {
+                                ui.label("Host:");
+                                if ui.text_edit_singleline(&mut wled.host).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Boost Playlist:");
+                                if ui.text_edit_singleline(&mut wled.boost_playlist).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Brightness:");
+                                if ui.add(egui::Slider::new(&mut wled.brightness, 0..=255)).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Setup:");
+                                if ui.checkbox(&mut wled.setup, "").changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Force:");
+                                if ui.checkbox(&mut wled.force, "").changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            
+                            // Segments, presets, and playlists would need more complex UI
+                            // This is a simplified version
+                            ui.label("Note: For advanced WLED settings (segments, presets, playlists), please edit config.toml directly.");
+                        }
+                    },
+                    "OSC" => {
+                        if let Some(osc) = &mut self.modified_config.osc {
+                            ui.horizontal(|ui| {
+                                ui.label("Address:");
+                                if ui.text_edit_singleline(&mut osc.address).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                        }
+                    },
+                    _ => {}
+                }
+            });
+        }
+    }
+}
+
+impl eframe::App for BlinkyBoostsApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Process any pending messages
+        self.process_messages();
+        
+        // Request repaint frequently to update status
+        ctx.request_repaint_after(Duration::from_millis(100));
+        
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("BlinkyBoosts Control Panel");
+            
+            ui.add_space(10.0);
+            
+            // Component status section
+            ui.heading("Component Status");
+            ui.separator();
+            
+            self.render_component_status(ui, "NWC");
+            self.render_component_status(ui, "Boostboard");
+            self.render_component_status(ui, "Zaps");
+            self.render_component_status(ui, "WLED");
+            self.render_component_status(ui, "OSC");
+            
+            ui.add_space(20.0);
+            
+            // Recent boosts section
+            ui.heading("Recent Boosts");
+            ui.separator();
+            
+            if self.recent_boosts.is_empty() {
+                ui.label("No recent boosts");
+            } else {
+                for (source, amount, time) in &self.recent_boosts {
+                    let elapsed = time.elapsed().as_secs();
+                    ui.horizontal(|ui| {
+                        ui.label(format!("[{}s ago] {} sats from {}", elapsed, amount, source));
+                    });
+                }
+            }
+            
+            // Save dialog
+            if self.show_save_dialog {
+                egui::Window::new("Save Configuration")
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.label("Configuration has been modified. Save changes?");
+                        
+                        if let Some(error) = &self.save_error {
+                            ui.label(RichText::new(error).color(Color32::RED));
+                        }
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Save").clicked() {
+                                self.save_config();
+                            }
+                            
+                            if ui.button("Cancel").clicked() {
+                                self.modified_config = self.config.clone();
+                                self.show_save_dialog = false;
+                                self.save_error = None;
+                            }
+                        });
+                    });
+            }
+        });
+    }
+}
+
+// Function to launch the GUI
+pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error::Error>> {
+    // Load configuration
+    let config = match crate::config::load_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Error loading config: {}", e);
+            // Create a default config if loading fails
+            Config {
+                nwc: None,
+                boostboard: None,
+                zaps: None,
+                osc: None,
+                wled: None,
+            }
+        }
+    };
+
+    let app = BlinkyBoostsApp::new(config);
+    
+    let options = eframe::NativeOptions {
+        viewport: ViewportBuilder::default()
+            .with_inner_size([800.0, 600.0])
+            .with_min_inner_size([400.0, 300.0])
+            .with_title("BlinkyBoosts"),
+        ..Default::default()
+    };
+    
+    // Run the app with the receiver
+    eframe::run_native(
+        "BlinkyBoosts",
+        options,
+        Box::new(|_cc| {
+            let mut app = app;
+            app.rx = Arc::new(Mutex::new(rx));
+            Box::new(app)
+        }),
+    )?;
+    
+    Ok(())
+} 

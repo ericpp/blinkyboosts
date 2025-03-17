@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::value::Value;
 use std::collections::HashMap;
-use std::error::Error;
+use anyhow::{Context, Result};
 use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Clone)]
@@ -103,21 +103,26 @@ impl WLed {
         }
     }
 
-    pub async fn load(&mut self, host: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn load(&mut self, host: &str) -> Result<()> {
         self.host = String::from(host);
-        self.load_effects().await?;
-        self.load_presets().await?;
+        self.load_effects().await
+            .context("Failed to load WLED effects")?;
+        self.load_presets().await
+            .context("Failed to load WLED presets")?;
         Ok(())
     }
 
-    pub async fn load_effects(&mut self) -> Result<(), Box<dyn Error>> {
-        self.effects = get_effects(&self.host).await?;
+    pub async fn load_effects(&mut self) -> Result<()> {
+        self.effects = get_effects(&self.host).await
+            .context("Failed to get WLED effects")?;
         Ok(())
     }
 
-    pub async fn load_presets(&mut self) -> Result<(), Box<dyn Error>> {
-        self.presets = get_presets(&self.host).await?;
-        self.raw_presets = get_raw_presets(&self.host).await?;
+    pub async fn load_presets(&mut self) -> Result<()> {
+        self.presets = get_presets(&self.host).await
+            .context("Failed to get WLED presets")?;
+        self.raw_presets = get_raw_presets(&self.host).await
+            .context("Failed to get raw WLED presets")?;
         Ok(())
     }
 
@@ -155,10 +160,11 @@ impl WLed {
         1
     }
 
-    pub async fn set_preset(&mut self, index: usize, config: &config::WLed, preset: &config::WLedPreset) -> Result<bool, Box<dyn Error>> {
+    pub async fn set_preset(&mut self, index: usize, config: &config::WLed, preset: &config::WLedPreset) -> Result<bool> {
         // let preset_id = self.get_preset_id(&preset.name);
         let preset_id = (index + 1) as u64;
-        let segments = config.segments.as_ref().unwrap();
+        let segments = config.segments.as_ref()
+            .context("No segments defined in configuration")?;
 
         let mut segs = vec![];
 
@@ -168,18 +174,29 @@ impl WLed {
                 let pset = preset.clone();
 
                 let colors1 = pset.colors[s].clone();
-                let colors2 = match &pset.colors2 {
-                    Some(col) => col[s].clone(),
-                    None => vec![0, 0, 0],
+                let colors2 = if let Some(colors) = &pset.colors2 {
+                    if s < colors.len() {
+                        colors[s].clone()
+                    } else {
+                        vec![0, 0, 0]
+                    }
+                } else {
+                    vec![0, 0, 0]
                 };
-                let colors3 = match &pset.colors3 {
-                    Some(col) => col[s].clone(),
-                    None => vec![0, 0, 0],
+
+                let colors3 = if let Some(colors) = &pset.colors3 {
+                    if s < colors.len() {
+                        colors[s].clone()
+                    } else {
+                        vec![0, 0, 0]
+                    }
+                } else {
+                    vec![0, 0, 0]
                 };
 
                 let effect_id = self.get_effect_id(&pset.effects[s]);
 
-                segs.push(JsonSegmentEnum::Segment(JsonSegment {
+                let seg = JsonSegment {
                     id: s as u64,
                     start: segment.start,
                     stop: segment.stop,
@@ -191,21 +208,15 @@ impl WLed {
                     bri: config.brightness,
                     cct: 127,
                     set: 0,
-                    n: segment.name,
+                    n: segment.name.clone(),
                     col: vec![colors1, colors2, colors3],
                     fx: effect_id,
-                    sx: match pset.speed {
-                        Some(val) => val,
-                        None => 128,
-                    },
-                    ix: match pset.intensity {
-                        Some(val) => val,
-                        None => 128,
-                    },
+                    sx: pset.speed.unwrap_or(128),
+                    ix: pset.intensity.unwrap_or(128),
                     pal: 0,
-                    c1: 128,
-                    c2: 128,
-                    c3: 16,
+                    c1: 0,
+                    c2: 0,
+                    c3: 0,
                     sel: true,
                     rev: segment.reverse.unwrap_or(false),
                     mi: false,
@@ -214,41 +225,59 @@ impl WLed {
                     o3: false,
                     si: 0,
                     m12: 0,
-                }));
+                };
+
+                segs.push(JsonSegmentEnum::Segment(seg));
             }
             else {
                 segs.push(JsonSegmentEnum::Empty { stop: 0 });
             }
         }
 
-        let json = JsonPreset {
-            psave: Some(preset_id),
+        let json_preset = JsonPreset {
             n: preset.name.clone(),
+            psave: Some(1),
             seg: segs,
             playlist: None,
         };
 
-        if !config.force && self.compare_preset(&json) {
-            return Ok(false);
+        let mut changed = true;
+
+        if let Some(existing) = self.raw_presets.get(&preset_id) {
+            changed = !self.compare_preset(existing);
         }
 
-        let state = json!({
-            "psave": preset_id,
-            "on": true,
-            "bri": config.brightness,
-            "transition": 7,
-            "mainseg": 0,
-            "seg": json.seg,
-            "n": json.n,
-            "ib": true,
-            "sb": true,
-        });
+        if changed || config.force {
+            let url = format!("http://{}/json/state", self.host);
+            let client = reqwest::Client::new();
 
-        if let Ok(()) = set_state(&self.host, state).await {
-            self.load_presets().await?;
+            let json = json!({
+                "on": true,
+                "bri": config.brightness,
+                "v": true,
+                "ps": preset_id,
+                "psave": 1,
+                "n": preset.name,
+                "seg": json_preset.seg,
+            });
+
+            let res = client.post(&url)
+                .json(&json)
+                .send()
+                .await
+                .context("Failed to send preset to WLED")?;
+
+            if !res.status().is_success() {
+                return Err(anyhow::anyhow!("Failed to set preset: HTTP {}", res.status()));
+            }
+
+            sleep(Duration::from_millis(500)).await;
+
+            self.load_presets().await
+                .context("Failed to reload presets after setting new preset")?;
         }
 
-        Ok(true)
+        Ok(changed)
     }
 
     fn compare_preset(&self, preset: &JsonPreset) -> bool {
@@ -264,7 +293,7 @@ impl WLed {
         compare_presets(preset, exists)
     }
 
-    pub async fn set_playlist(&mut self, index: usize, config: &config::WLed, playlist: &config::WLedPlaylist) -> Result<bool, Box<dyn Error>> {
+    pub async fn set_playlist(&mut self, index: usize, config: &config::WLed, playlist: &config::WLedPlaylist) -> Result<bool> {
         let preset_id = (index + 100) as u64;
         let end_playlist_id = self.get_preset_id(&playlist.end);
 
@@ -307,59 +336,67 @@ impl WLed {
         Ok(true)
     }
 
-    pub async fn run_preset(&self, preset: Preset) -> Result<(), Box<dyn Error>> {
+    pub async fn run_preset(&self, preset: Preset) -> Result<()> {
         let id = self.get_preset_id(&preset.name);
         self.run_preset_id(id).await
+            .context(format!("Failed to run preset: {}", preset.name))
     }
 
-    pub async fn run_preset_id(&self, preset_id: u64) -> Result<(), Box<dyn Error>> {
+    pub async fn run_preset_id(&self, preset_id: u64) -> Result<()> {
         set_state(&self.host, json!({"ps": preset_id})).await
+            .context(format!("Failed to set state for preset ID: {}", preset_id))
     }
 }
 
-async fn get_effects(host: &str) -> Result<Vec<Effect>, Box<dyn Error>> {
+async fn get_effects(host: &str) -> Result<Vec<Effect>> {
     let addr = format!("http://{}/json/effects", host);
-    let resp = reqwest::get(addr).await?
+    let resp = reqwest::get(&addr).await
+        .context(format!("Failed to connect to WLED at {}", addr))?
         .json::<Value>()
-        .await?;
+        .await
+        .context("Failed to parse effects JSON response")?;
 
-    let result = resp.as_array();
+    let result = resp.as_array()
+        .ok_or_else(|| anyhow::anyhow!("Expected array of effects but got: {}", resp))?;
 
-    if result.is_none() {
-        return Ok(vec![]);
-    }
-
-    let result = result.unwrap();
-
-    let effects = result.into_iter().enumerate().map(
-        |(id, name)| Effect {
-            id: id.try_into().unwrap(),
-            name: name.as_str().unwrap().to_string(),
-        }
-    ).collect();
+    let effects = result.iter().enumerate()
+        .map(|(id, name)| {
+            let name_str = name.as_str()
+                .ok_or_else(|| anyhow::anyhow!("Effect name is not a string: {}", name))?;
+            
+            Ok(Effect {
+                id: id as u64,
+                name: name_str.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(effects)
 }
 
-async fn get_raw_presets(host: &str) -> Result<HashMap<u64, JsonPreset>, Box<dyn Error>> {
+async fn get_raw_presets(host: &str) -> Result<HashMap<u64, JsonPreset>> {
     let addr = format!("http://{}/presets.json", host);
-    let resp = reqwest::get(addr).await?
+    let resp = reqwest::get(&addr).await
+        .context(format!("Failed to connect to WLED at {}", addr))?
         .json::<HashMap<u64, Value>>()
-        .await?;
+        .await
+        .context("Failed to parse presets JSON response")?;
 
     let result = resp.into_iter()
         .filter(|(id, _)| *id != 0)
         .map(|(id, val)| {
-            let value: JsonPreset = serde_json::from_value(val).unwrap();
-            (id, value)
+            let value: JsonPreset = serde_json::from_value(val)
+                .context(format!("Failed to parse preset JSON for ID {}", id))?;
+            Ok((id, value))
         })
-        .collect();
+        .collect::<Result<HashMap<_, _>>>()?;
 
     Ok(result)
 }
 
-async fn get_presets(host: &str) -> Result<Vec<Preset>, Box<dyn Error>> {
-    let map = get_raw_presets(host).await?;
+async fn get_presets(host: &str) -> Result<Vec<Preset>> {
+    let map = get_raw_presets(host).await
+        .context("Failed to get raw presets")?;
 
     let pls = map.into_iter().map(
         |(id, preset)| Preset {
@@ -371,24 +408,27 @@ async fn get_presets(host: &str) -> Result<Vec<Preset>, Box<dyn Error>> {
     Ok(pls)
 }
 
-async fn set_state(host: &str, json: Value) -> Result<(), Box<dyn Error>> {
+async fn set_state(host: &str, json: Value) -> Result<()> {
     let addr = format!("http://{}/json/state", host);
-    let json = json.to_string();
+    let json_str = json.to_string();
 
-    println!("{} {}", addr, json);
+    println!("{} {}", addr, json_str);
 
     let client = reqwest::Client::new();
-    let res = client.post(addr)
-        .body(json)
+    let res = client.post(&addr)
+        .body(json_str)
         .send()
-        .await?;
+        .await
+        .context(format!("Failed to send state to WLED at {}", addr))?;
 
-    let body = res.text().await?;
+    if !res.status().is_success() {
+        return Err(anyhow::anyhow!("Failed to set state: HTTP {}", res.status()));
+    }
 
-    println!("body: {:#?}", body);
-    println!();
+    let body = res.text().await
+        .context("Failed to read response body")?;
 
-    sleep(Duration::from_millis(1000)).await;
+    println!("Response: {}", body);
 
     Ok(())
 }
