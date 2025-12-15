@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+artnet_protocol = "0.4.4"
 hex = "0.4.3"
 lightning-invoice = "0.32.0"
 nostr-sdk = "0.35.0"

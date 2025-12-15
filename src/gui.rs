@@ -1,4 +1,4 @@
-use crate::config::{Config, BoostBoard, NWC, OSC, WLed, Zaps};
+use crate::config::{Config, BoostBoard, NWC, OSC, ArtNet, WLed, Zaps};
 use eframe::egui;
 use egui::{Color32, RichText, Ui, ViewportBuilder};
 use std::sync::{Arc, Mutex};
@@ -80,6 +80,8 @@ impl BlinkyBoostsApp {
             if app.config.wled.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
         app.component_statuses.insert("OSC".to_string(), 
             if app.config.osc.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
+        app.component_statuses.insert("Art-Net".to_string(), 
+            if app.config.artnet.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
         
         // Initialize settings visibility
         app.show_settings.insert("NWC".to_string(), false);
@@ -87,6 +89,7 @@ impl BlinkyBoostsApp {
         app.show_settings.insert("Zaps".to_string(), false);
         app.show_settings.insert("WLED".to_string(), false);
         app.show_settings.insert("OSC".to_string(), false);
+        app.show_settings.insert("Art-Net".to_string(), false);
         
         app
     }
@@ -194,6 +197,16 @@ impl BlinkyBoostsApp {
                         } else if self.modified_config.osc.is_none() {
                             self.modified_config.osc = Some(OSC { 
                                 address: "".to_string(),
+                            });
+                        }
+                    },
+                    "Art-Net" => {
+                        if is_enabled {
+                            self.modified_config.artnet = None;
+                        } else if self.modified_config.artnet.is_none() {
+                            self.modified_config.artnet = Some(ArtNet { 
+                                address: "".to_string(),
+                                universe: Some(0),
                             });
                         }
                     },
@@ -327,6 +340,26 @@ impl BlinkyBoostsApp {
                             });
                         }
                     },
+                    "Art-Net" => {
+                        if let Some(artnet) = &mut self.modified_config.artnet {
+                            ui.horizontal(|ui| {
+                                ui.label("Address:");
+                                if ui.text_edit_singleline(&mut artnet.address).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Universe:");
+                                let mut universe_str = artnet.universe.unwrap_or(0).to_string();
+                                if ui.text_edit_singleline(&mut universe_str).changed() {
+                                    if let Ok(u) = universe_str.parse::<u16>() {
+                                        artnet.universe = Some(u);
+                                        self.show_save_dialog = true;
+                                    }
+                                }
+                            });
+                        }
+                    },
                     _ => {}
                 }
             });
@@ -356,9 +389,10 @@ impl eframe::App for BlinkyBoostsApp {
             self.render_component_status(ui, "Zaps");
             self.render_component_status(ui, "WLED");
             self.render_component_status(ui, "OSC");
-            
+            self.render_component_status(ui, "Art-Net");
+
             ui.add_space(20.0);
-            
+
             // Recent boosts section
             ui.heading("Recent Boosts");
             ui.separator();
@@ -416,6 +450,7 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
                 boostboard: None,
                 zaps: None,
                 osc: None,
+                artnet: None,
                 wled: None,
             }
         }

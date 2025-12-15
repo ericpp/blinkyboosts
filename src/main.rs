@@ -8,6 +8,7 @@ mod boosts;
 mod config;
 mod nwc;
 mod osc;
+mod artnet;
 mod wled;
 mod zaps;
 mod gui;
@@ -115,6 +116,14 @@ async fn trigger_effects(config: config::Config, sats: i64) -> Result<()> {
         let osc = osc::Osc::new(cfg.address.clone());
         osc.trigger_for_sats(sats)
             .context("Failed to trigger OSC")?;
+    }
+
+    if let Some(cfg) = config.artnet {
+        println!("Triggering Art-Net with value {}", sats);
+
+        let artnet = artnet::ArtNet::new(cfg.address.clone(), cfg.universe);
+        artnet?.trigger_for_sats(sats)
+            .context("Failed to trigger Art-Net")?;
     }
 
     Ok(())
