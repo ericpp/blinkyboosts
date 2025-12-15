@@ -496,7 +496,31 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
     eframe::run_native(
         "BlinkyBoosts",
         options,
-        Box::new(|_cc| {
+        Box::new(|cc| {
+            // Increase font sizes
+            let mut style = (*cc.egui_ctx.style()).clone();
+            style.text_styles.insert(
+                egui::TextStyle::Body,
+                egui::FontId::new(16.0, egui::FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                egui::TextStyle::Button,
+                egui::FontId::new(16.0, egui::FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                egui::TextStyle::Heading,
+                egui::FontId::new(24.0, egui::FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                egui::TextStyle::Name("Heading2".into()),
+                egui::FontId::new(20.0, egui::FontFamily::Proportional),
+            );
+            style.text_styles.insert(
+                egui::TextStyle::Monospace,
+                egui::FontId::new(14.0, egui::FontFamily::Monospace),
+            );
+            cc.egui_ctx.set_style(style);
+
             let mut app = app;
             app.rx = Arc::new(Mutex::new(rx));
             Box::new(app)
