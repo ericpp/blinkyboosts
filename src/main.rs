@@ -315,7 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
 
     // Create a channel for communication between async tasks and the GUI
-    let (tx, rx) = tokio::sync::mpsc::channel::<GuiMessage>(100);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<GuiMessage>(100);
 
     // Spawn async tasks on the tokio runtime
     let config_clone = config.clone();
@@ -351,8 +351,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         listen_for_nwc(config_clone, tx_clone).await;
     });
 
+    // Create a handler for test triggers and message forwarding
+    // This task reads from the main channel, handles TestTrigger messages,
+    // and forwards other messages to the GUI
+    let config_for_tests = config.clone();
+    let (gui_tx, gui_rx) = tokio::sync::mpsc::channel::<GuiMessage>(100);
+
+    rt.spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                GuiMessage::TestTrigger(sats) => {
+                    println!("Test trigger received for {} sats", sats);
+                    if let Err(e) = trigger_effects(config_for_tests.clone(), sats).await {
+                        eprintln!("Error triggering test effects: {:#}", e);
+                    }
+                },
+                other => {
+                    // Forward other messages to GUI
+                    let _ = gui_tx.send(other).await;
+                }
+            }
+        }
+    });
+
     // Run the GUI on the main thread
-    gui::run_gui(rx)?;
+    gui::run_gui(gui_rx)?;
 
     Ok(())
 }

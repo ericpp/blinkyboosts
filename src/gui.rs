@@ -38,6 +38,7 @@ impl ComponentStatus {
 pub enum GuiMessage {
     UpdateStatus(String, ComponentStatus),
     BoostReceived(String, i64),
+    TestTrigger(i64),
 }
 
 // Main application state
@@ -51,6 +52,7 @@ pub struct BlinkyBoostsApp {
     show_save_dialog: bool,
     save_error: Option<String>,
     show_settings: std::collections::HashMap<String, bool>,
+    test_sat_amount: String,
 }
 
 impl BlinkyBoostsApp {
@@ -67,6 +69,7 @@ impl BlinkyBoostsApp {
             show_save_dialog: false,
             save_error: None,
             show_settings: std::collections::HashMap::new(),
+            test_sat_amount: String::new(),
         };
         
         // Initialize component statuses
@@ -128,6 +131,10 @@ impl BlinkyBoostsApp {
                     },
                     GuiMessage::BoostReceived(source, amount) => {
                         self.recent_boosts.push((source, amount, Instant::now()));
+                    },
+                    GuiMessage::TestTrigger(_) => {
+                        // TestTrigger messages are handled by the background task
+                        // They shouldn't reach here, but we handle it for completeness
                     }
                 }
             }
@@ -390,6 +397,25 @@ impl eframe::App for BlinkyBoostsApp {
             self.render_component_status(ui, "WLED");
             self.render_component_status(ui, "OSC");
             self.render_component_status(ui, "Art-Net");
+
+            ui.add_space(20.0);
+
+            // Test section
+            ui.heading("Test Effects");
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Sat Amount:");
+                ui.text_edit_singleline(&mut self.test_sat_amount);
+                if ui.button("Trigger Test").clicked() {
+                    if let Ok(sats) = self.test_sat_amount.parse::<i64>() {
+                        if sats > 0 {
+                            let _ = self.tx.send(GuiMessage::TestTrigger(sats));
+                            // Also add to recent boosts for visual feedback
+                            self.recent_boosts.push(("Test".to_string(), sats, Instant::now()));
+                        }
+                    }
+                }
+            });
 
             ui.add_space(20.0);
 
