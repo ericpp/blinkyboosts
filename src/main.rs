@@ -360,25 +360,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Spawn the zaps listener
-    let config_clone = config.clone();
-    let tx_clone = tx.clone();
-    rt.spawn(async move {
-        listen_for_zaps(config_clone, tx_clone).await;
-    });
+    if config.zaps.is_some() {
+        let config_clone = config.clone();
+        let tx_clone = tx.clone();
+
+        rt.spawn(async move {
+            listen_for_zaps(config_clone, tx_clone).await;
+        });
+    }
 
     // Spawn the boostboard listener
-    let config_clone = config.clone();
-    let tx_clone = tx.clone();
-    rt.spawn(async move {
-        listen_for_boostboard(config_clone, tx_clone).await;
-    });
+    if config.boostboard.is_some() {
+        let config_clone = config.clone();
+        let tx_clone = tx.clone();
+
+        rt.spawn(async move {
+            listen_for_boostboard(config_clone, tx_clone).await;
+        });
+    }
 
     // Spawn the NWC listener
-    let config_clone = config.clone();
-    let tx_clone = tx.clone();
-    rt.spawn(async move {
-        listen_for_nwc(config_clone, tx_clone).await;
-    });
+    if config.nwc.is_some() {
+        let config_clone = config.clone();
+        let tx_clone = tx.clone();
+
+        rt.spawn(async move {
+            listen_for_nwc(config_clone, tx_clone).await;
+        });
+    }
 
     // Create a handler for test triggers and message forwarding
     // This task reads from the main channel, handles TestTrigger messages,
