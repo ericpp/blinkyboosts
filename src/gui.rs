@@ -17,10 +17,10 @@ pub enum ComponentStatus {
 impl ComponentStatus {
     pub fn color(&self) -> Color32 {
         match self {
-            ComponentStatus::Disabled => Color32::GRAY,
-            ComponentStatus::Enabled => Color32::YELLOW,
-            ComponentStatus::Running => Color32::GREEN,
-            ComponentStatus::Error(_) => Color32::RED,
+            ComponentStatus::Disabled => Color32::from_rgb(150, 150, 150), // Light grey for dark background
+            ComponentStatus::Enabled => Color32::from_rgb(255, 220, 100), // Bright yellow/gold for dark background
+            ComponentStatus::Running => Color32::from_rgb(100, 255, 100), // Bright green for dark background
+            ComponentStatus::Error(_) => Color32::from_rgb(255, 100, 100), // Bright red for dark background
         }
     }
 
@@ -58,7 +58,7 @@ pub struct BlinkyBoostsApp {
 impl BlinkyBoostsApp {
     pub fn new(config: Config) -> Self {
         let (tx, rx) = mpsc::channel(100);
-        
+
         let mut app = BlinkyBoostsApp {
             config: config.clone(),
             modified_config: config,
@@ -71,21 +71,21 @@ impl BlinkyBoostsApp {
             show_settings: std::collections::HashMap::new(),
             test_sat_amount: String::new(),
         };
-        
+
         // Initialize component statuses
-        app.component_statuses.insert("NWC".to_string(), 
+        app.component_statuses.insert("NWC".to_string(),
             if app.config.nwc.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
-        app.component_statuses.insert("Boostboard".to_string(), 
+        app.component_statuses.insert("Boostboard".to_string(),
             if app.config.boostboard.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
-        app.component_statuses.insert("Zaps".to_string(), 
+        app.component_statuses.insert("Zaps".to_string(),
             if app.config.zaps.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
-        app.component_statuses.insert("WLED".to_string(), 
+        app.component_statuses.insert("WLED".to_string(),
             if app.config.wled.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
-        app.component_statuses.insert("OSC".to_string(), 
+        app.component_statuses.insert("OSC".to_string(),
             if app.config.osc.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
-        app.component_statuses.insert("Art-Net".to_string(), 
+        app.component_statuses.insert("Art-Net".to_string(),
             if app.config.artnet.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
-        
+
         // Initialize settings visibility
         app.show_settings.insert("NWC".to_string(), false);
         app.show_settings.insert("Boostboard".to_string(), false);
@@ -93,14 +93,14 @@ impl BlinkyBoostsApp {
         app.show_settings.insert("WLED".to_string(), false);
         app.show_settings.insert("OSC".to_string(), false);
         app.show_settings.insert("Art-Net".to_string(), false);
-        
+
         app
     }
-    
+
     pub fn sender(&self) -> mpsc::Sender<GuiMessage> {
         self.tx.clone()
     }
-    
+
     fn save_config(&mut self) {
         // Save the modified config to file
         match toml::to_string(&self.modified_config) {
@@ -121,7 +121,7 @@ impl BlinkyBoostsApp {
             }
         }
     }
-    
+
     fn process_messages(&mut self) {
         if let Ok(mut rx) = self.rx.try_lock() {
             while let Ok(message) = rx.try_recv() {
@@ -139,18 +139,18 @@ impl BlinkyBoostsApp {
                 }
             }
         }
-        
+
         // Remove boosts older than 30 seconds
         self.recent_boosts.retain(|(_, _, time)| time.elapsed() < Duration::from_secs(30));
     }
-    
+
     fn render_component_status(&mut self, ui: &mut Ui, component: &str) {
         let status = self.component_statuses.get(component).cloned().unwrap_or(ComponentStatus::Disabled);
-        
+
         ui.horizontal(|ui| {
             ui.label(component);
             ui.label(RichText::new(status.display_text()).color(status.color()));
-            
+
             // Toggle button
             let is_enabled = status != ComponentStatus::Disabled;
             if ui.button(if is_enabled { "Disable" } else { "Enable" }).clicked() {
@@ -166,7 +166,7 @@ impl BlinkyBoostsApp {
                         if is_enabled {
                             self.modified_config.boostboard = None;
                         } else if self.modified_config.boostboard.is_none() {
-                            self.modified_config.boostboard = Some(BoostBoard { 
+                            self.modified_config.boostboard = Some(BoostBoard {
                                 relay_addr: "".to_string(),
                                 pubkey: "".to_string(),
                             });
@@ -176,7 +176,7 @@ impl BlinkyBoostsApp {
                         if is_enabled {
                             self.modified_config.zaps = None;
                         } else if self.modified_config.zaps.is_none() {
-                            self.modified_config.zaps = Some(Zaps { 
+                            self.modified_config.zaps = Some(Zaps {
                                 relay_addrs: vec!["".to_string()],
                                 naddr: "".to_string(),
                             });
@@ -186,7 +186,7 @@ impl BlinkyBoostsApp {
                         if is_enabled {
                             self.modified_config.wled = None;
                         } else if self.modified_config.wled.is_none() {
-                            self.modified_config.wled = Some(WLed { 
+                            self.modified_config.wled = Some(WLed {
                                 host: "".to_string(),
                                 boost_playlist: "BOOST".to_string(),
                                 brightness: 128,
@@ -202,7 +202,7 @@ impl BlinkyBoostsApp {
                         if is_enabled {
                             self.modified_config.osc = None;
                         } else if self.modified_config.osc.is_none() {
-                            self.modified_config.osc = Some(OSC { 
+                            self.modified_config.osc = Some(OSC {
                                 address: "".to_string(),
                             });
                         }
@@ -211,7 +211,7 @@ impl BlinkyBoostsApp {
                         if is_enabled {
                             self.modified_config.artnet = None;
                         } else if self.modified_config.artnet.is_none() {
-                            self.modified_config.artnet = Some(ArtNet { 
+                            self.modified_config.artnet = Some(ArtNet {
                                 address: "".to_string(),
                                 universe: Some(0),
                             });
@@ -219,14 +219,14 @@ impl BlinkyBoostsApp {
                     },
                     _ => {}
                 }
-                
+
                 // Update status
-                self.component_statuses.insert(component.to_string(), 
+                self.component_statuses.insert(component.to_string(),
                     if is_enabled { ComponentStatus::Disabled } else { ComponentStatus::Enabled });
-                
+
                 self.show_save_dialog = true;
             }
-            
+
             // Settings button
             if status != ComponentStatus::Disabled {
                 if ui.button("Settings").clicked() {
@@ -235,7 +235,7 @@ impl BlinkyBoostsApp {
                 }
             }
         });
-        
+
         // Show settings if expanded
         if *self.show_settings.get(component).unwrap_or(&false) && status != ComponentStatus::Disabled {
             ui.indent(component, |ui| {
@@ -274,7 +274,7 @@ impl BlinkyBoostsApp {
                                     self.show_save_dialog = true;
                                 }
                             });
-                            
+
                             ui.label("Relay Addresses:");
                             let mut to_remove = None;
                             for (i, addr) in zaps.relay_addrs.iter_mut().enumerate() {
@@ -288,11 +288,11 @@ impl BlinkyBoostsApp {
                                     }
                                 });
                             }
-                            
+
                             if let Some(idx) = to_remove {
                                 zaps.relay_addrs.remove(idx);
                             }
-                            
+
                             if ui.button("Add Relay").clicked() {
                                 zaps.relay_addrs.push("".to_string());
                                 self.show_save_dialog = true;
@@ -331,7 +331,7 @@ impl BlinkyBoostsApp {
                                     self.show_save_dialog = true;
                                 }
                             });
-                            
+
                             // Segments, presets, and playlists would need more complex UI
                             // This is a simplified version
                             ui.label("Note: For advanced WLED settings (segments, presets, playlists), please edit config.toml directly.");
@@ -378,19 +378,19 @@ impl eframe::App for BlinkyBoostsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Process any pending messages
         self.process_messages();
-        
+
         // Request repaint frequently to update status
         ctx.request_repaint_after(Duration::from_millis(100));
-        
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("BlinkyBoosts Control Panel");
-            
+
             ui.add_space(10.0);
-            
+
             // Component status section
             ui.heading("Component Status");
             ui.separator();
-            
+
             self.render_component_status(ui, "NWC");
             self.render_component_status(ui, "Boostboard");
             self.render_component_status(ui, "Zaps");
@@ -422,7 +422,7 @@ impl eframe::App for BlinkyBoostsApp {
             // Recent boosts section
             ui.heading("Recent Boosts");
             ui.separator();
-            
+
             if self.recent_boosts.is_empty() {
                 ui.label("No recent boosts");
             } else {
@@ -433,7 +433,7 @@ impl eframe::App for BlinkyBoostsApp {
                     });
                 }
             }
-            
+
             // Save dialog
             if self.show_save_dialog {
                 egui::Window::new("Save Configuration")
@@ -441,16 +441,16 @@ impl eframe::App for BlinkyBoostsApp {
                     .resizable(false)
                     .show(ctx, |ui| {
                         ui.label("Configuration has been modified. Save changes?");
-                        
+
                         if let Some(error) = &self.save_error {
-                            ui.label(RichText::new(error).color(Color32::RED));
+                            ui.label(RichText::new(error).color(Color32::from_rgb(255, 100, 100)));
                         }
-                        
+
                         ui.horizontal(|ui| {
                             if ui.button("Save").clicked() {
                                 self.save_config();
                             }
-                            
+
                             if ui.button("Cancel").clicked() {
                                 self.modified_config = self.config.clone();
                                 self.show_save_dialog = false;
@@ -483,7 +483,7 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
     };
 
     let app = BlinkyBoostsApp::new(config);
-    
+
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])
@@ -491,13 +491,13 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
             .with_title("BlinkyBoosts"),
         ..Default::default()
     };
-    
+
     // Run the app with the receiver
     eframe::run_native(
         "BlinkyBoosts",
         options,
         Box::new(|cc| {
-            // Increase font sizes
+            // Increase font sizes and set dark mode
             let mut style = (*cc.egui_ctx.style()).clone();
             style.text_styles.insert(
                 egui::TextStyle::Body,
@@ -519,6 +519,19 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
                 egui::TextStyle::Monospace,
                 egui::FontId::new(14.0, egui::FontFamily::Monospace),
             );
+            // Set dark mode visuals
+            style.visuals = egui::style::Visuals::dark();
+            // Customize dark mode colors for better appearance and higher contrast
+            style.visuals.panel_fill = Color32::from_rgb(20, 20, 20); // Very dark background
+            style.visuals.window_fill = Color32::from_rgb(15, 15, 15); // Almost black for windows
+            style.visuals.extreme_bg_color = Color32::from_rgb(30, 30, 30); // Slightly lighter for contrast
+            style.visuals.faint_bg_color = Color32::from_rgb(35, 35, 35); // For subtle backgrounds
+            // Make text off-white/light grey for comfortable viewing
+            style.visuals.override_text_color = Some(Color32::from_rgb(220, 220, 220)); // Off-white/light grey text
+            style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(40, 40, 40); // Darker widget backgrounds
+            style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(35, 35, 35);
+            style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(50, 50, 50); // Slightly lighter on hover
+            style.visuals.widgets.active.bg_fill = Color32::from_rgb(60, 60, 60); // Lighter when active
             cc.egui_ctx.set_style(style);
 
             let mut app = app;
@@ -526,6 +539,6 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
             Box::new(app)
         }),
     )?;
-    
+
     Ok(())
-} 
+}
