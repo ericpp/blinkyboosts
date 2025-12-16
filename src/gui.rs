@@ -1,4 +1,4 @@
-use crate::config::{Config, BoostBoard, NWC, OSC, ArtNet, WLed, Zaps};
+use crate::config::{Config, BoostBoard, NWC, OSC, ArtNet, Sacn, WLed, Zaps};
 use eframe::egui;
 use egui::{Color32, RichText, Ui, ViewportBuilder};
 use std::sync::{Arc, Mutex};
@@ -83,6 +83,8 @@ impl BlinkyBoostsApp {
             if app.config.osc.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
         app.component_statuses.insert("Art-Net".to_string(),
             if app.config.artnet.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
+        app.component_statuses.insert("sACN".to_string(),
+            if app.config.sacn.is_some() { ComponentStatus::Enabled } else { ComponentStatus::Disabled });
 
         // Initialize settings visibility
         app.show_settings.insert("NWC".to_string(), false);
@@ -91,6 +93,7 @@ impl BlinkyBoostsApp {
         app.show_settings.insert("WLED".to_string(), false);
         app.show_settings.insert("OSC".to_string(), false);
         app.show_settings.insert("Art-Net".to_string(), false);
+        app.show_settings.insert("sACN".to_string(), false);
 
         app
     }
@@ -215,6 +218,16 @@ impl BlinkyBoostsApp {
                             });
                         }
                     },
+                    "sACN" => {
+                        if is_enabled {
+                            self.modified_config.sacn = None;
+                        } else if self.modified_config.sacn.is_none() {
+                            self.modified_config.sacn = Some(Sacn {
+                                broadcast_address: "".to_string(),
+                                universe: Some(1),
+                            });
+                        }
+                    },
                     _ => {}
                 }
 
@@ -282,6 +295,15 @@ impl BlinkyBoostsApp {
                                 self.modified_config.artnet = Some(ArtNet {
                                     broadcast_address: "".to_string(),
                                     universe: Some(0),
+                                });
+                                self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
+                            }
+                        },
+                        "sACN" => {
+                            if self.modified_config.sacn.is_none() {
+                                self.modified_config.sacn = Some(Sacn {
+                                    broadcast_address: "".to_string(),
+                                    universe: Some(1),
                                 });
                                 self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
                             }
@@ -426,6 +448,20 @@ impl BlinkyBoostsApp {
                             });
                         }
                     },
+                    "sACN" => {
+                        if let Some(sacn) = &mut self.modified_config.sacn {
+                            ui.horizontal(|ui| {
+                                ui.label("Universe:");
+                                let mut universe_str = sacn.universe.unwrap_or(1).to_string();
+                                if ui.text_edit_singleline(&mut universe_str).changed() {
+                                    if let Ok(u) = universe_str.parse::<u16>() {
+                                        sacn.universe = Some(u);
+                                        self.show_save_dialog = true;
+                                    }
+                                }
+                            });
+                        }
+                    },
                     _ => {}
                 }
             });
@@ -456,6 +492,7 @@ impl eframe::App for BlinkyBoostsApp {
             self.render_component_status(ui, "WLED");
             self.render_component_status(ui, "OSC");
             self.render_component_status(ui, "Art-Net");
+            self.render_component_status(ui, "sACN");
 
             ui.add_space(20.0);
 
@@ -542,6 +579,7 @@ pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>) -> 
                 zaps: None,
                 osc: None,
                 artnet: None,
+                sacn: None,
                 wled: None,
             }
         }

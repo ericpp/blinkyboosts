@@ -10,6 +10,7 @@ pub struct Config {
     pub zaps: Option<Zaps>,
     pub osc: Option<OSC>,
     pub artnet: Option<ArtNet>,
+    pub sacn: Option<Sacn>,
     pub wled: Option<WLed>,
 }
 
@@ -37,6 +38,12 @@ pub struct OSC {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ArtNet {
+    pub broadcast_address: String,
+    pub universe: Option<u16>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct Sacn {
     pub broadcast_address: String,
     pub universe: Option<u16>,
 }

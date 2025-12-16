@@ -9,6 +9,7 @@ mod config;
 mod nwc;
 mod osc;
 mod artnet;
+mod sacn;
 mod wled;
 mod zaps;
 mod gui;
@@ -128,6 +129,15 @@ async fn trigger_effects(config: config::Config, sats: i64) -> Result<Vec<String
         artnet?.trigger_for_sats(sats)
             .context("Failed to trigger Art-Net")?;
         triggered.push("Art-Net".to_string());
+    }
+
+    if let Some(cfg) = config.sacn {
+        println!("Triggering sACN with value {}", sats);
+
+        let mut sacn = sacn::Sacn::new(cfg.broadcast_address.clone(), cfg.universe)?;
+        sacn.trigger_for_sats(sats)
+            .context("Failed to trigger sACN")?;
+        triggered.push("sACN".to_string());
     }
 
     Ok(triggered)

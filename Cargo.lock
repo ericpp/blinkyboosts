@@ -684,6 +684,7 @@ dependencies = [
  "nwc",
  "reqwest",
  "rosc",
+ "sacn",
  "serde",
  "serde_derive",
  "serde_json",
