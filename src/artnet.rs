@@ -9,10 +9,17 @@ pub struct ArtNet {
 }
 
 impl ArtNet {
-    pub fn new(broadcast_address: String, universe: Option<u16>) -> Result<Self> {
-        // Bind to 0.0.0.0 (all interfaces) instead of localhost to allow sending to different networks
-        let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))?;
-        
+    pub fn new(broadcast_address: String, local_address: Option<String>, universe: Option<u16>) -> Result<Self> {
+        // Bind to specific local interface if provided, otherwise bind to all interfaces
+        let bind_addr = if let Some(local_addr) = local_address {
+            local_addr.parse::<Ipv4Addr>()
+                .map_err(|e| anyhow::anyhow!("Invalid local address '{}': {}", local_addr, e))?
+        } else {
+            Ipv4Addr::UNSPECIFIED
+        };
+
+        let sock = UdpSocket::bind(SocketAddrV4::new(bind_addr, 0))?;
+
         // Enable broadcast to allow sending to broadcast addresses
         sock.set_broadcast(true)?;
 

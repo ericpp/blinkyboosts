@@ -214,6 +214,7 @@ impl BlinkyBoostsApp {
                         } else if self.modified_config.artnet.is_none() {
                             self.modified_config.artnet = Some(ArtNet {
                                 broadcast_address: "".to_string(),
+                                local_address: None,
                                 universe: Some(0),
                             });
                         }
@@ -294,6 +295,7 @@ impl BlinkyBoostsApp {
                             if self.modified_config.artnet.is_none() {
                                 self.modified_config.artnet = Some(ArtNet {
                                     broadcast_address: "".to_string(),
+                                    local_address: None,
                                     universe: Some(0),
                                 });
                                 self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
@@ -433,6 +435,18 @@ impl BlinkyBoostsApp {
                             ui.horizontal(|ui| {
                                 ui.label("Broadcast Address:");
                                 if ui.text_edit_singleline(&mut artnet.broadcast_address).changed() {
+                                    self.show_save_dialog = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Local Address:");
+                                let mut local_addr_str = artnet.local_address.clone().unwrap_or_default();
+                                if ui.text_edit_singleline(&mut local_addr_str).changed() {
+                                    artnet.local_address = if local_addr_str.is_empty() {
+                                        None
+                                    } else {
+                                        Some(local_addr_str)
+                                    };
                                     self.show_save_dialog = true;
                                 }
                             });

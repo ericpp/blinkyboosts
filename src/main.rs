@@ -125,7 +125,7 @@ async fn trigger_effects(config: config::Config, sats: i64) -> Result<Vec<String
     if let Some(cfg) = config.artnet {
         println!("Triggering Art-Net with value {}", sats);
 
-        let artnet = artnet::ArtNet::new(cfg.broadcast_address.clone(), cfg.universe);
+        let artnet = artnet::ArtNet::new(cfg.broadcast_address.clone(), cfg.local_address.clone(), cfg.universe);
         artnet?.trigger_for_sats(sats)
             .context("Failed to trigger Art-Net")?;
         triggered.push("Art-Net".to_string());
