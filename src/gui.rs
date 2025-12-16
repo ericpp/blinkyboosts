@@ -37,7 +37,7 @@ impl ComponentStatus {
 // Message types for communication between GUI and background tasks
 pub enum GuiMessage {
     UpdateStatus(String, ComponentStatus),
-    BoostReceived(String, i64),
+    BoostReceived(String, i64, Vec<String>),
     TestTrigger(i64),
 }
 
@@ -46,7 +46,7 @@ pub struct BlinkyBoostsApp {
     config: Config,
     modified_config: Config,
     component_statuses: std::collections::HashMap<String, ComponentStatus>,
-    recent_boosts: Vec<(String, i64, Instant)>,
+    recent_boosts: Vec<(String, i64, Vec<String>, Instant)>,
     tx: mpsc::Sender<GuiMessage>,
     rx: Arc<Mutex<mpsc::Receiver<GuiMessage>>>,
     show_save_dialog: bool,
@@ -56,9 +56,7 @@ pub struct BlinkyBoostsApp {
 }
 
 impl BlinkyBoostsApp {
-    pub fn new(config: Config) -> Self {
-        let (tx, rx) = mpsc::channel(100);
-
+    pub fn new(config: Config, tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>) -> Self {
         let mut app = BlinkyBoostsApp {
             config: config.clone(),
             modified_config: config,
@@ -129,8 +127,8 @@ impl BlinkyBoostsApp {
                     GuiMessage::UpdateStatus(component, status) => {
                         self.component_statuses.insert(component, status);
                     },
-                    GuiMessage::BoostReceived(source, amount) => {
-                        self.recent_boosts.push((source, amount, Instant::now()));
+                    GuiMessage::BoostReceived(source, amount, effects) => {
+                        self.recent_boosts.push((source, amount, effects, Instant::now()));
                     },
                     GuiMessage::TestTrigger(_) => {
                         // TestTrigger messages are handled by the background task
@@ -141,7 +139,7 @@ impl BlinkyBoostsApp {
         }
 
         // Remove boosts older than 30 seconds
-        self.recent_boosts.retain(|(_, _, time)| time.elapsed() < Duration::from_secs(30));
+        self.recent_boosts.retain(|(_, _, _, time)| time.elapsed() < Duration::from_secs(30));
     }
 
     fn render_component_status(&mut self, ui: &mut Ui, component: &str) {
@@ -409,9 +407,10 @@ impl eframe::App for BlinkyBoostsApp {
                 if ui.button("Trigger Test").clicked() {
                     if let Ok(sats) = self.test_sat_amount.parse::<i64>() {
                         if sats > 0 {
-                            let _ = self.tx.send(GuiMessage::TestTrigger(sats));
-                            // Also add to recent boosts for visual feedback
-                            self.recent_boosts.push(("Test".to_string(), sats, Instant::now()));
+                            if let Err(e) = self.tx.try_send(GuiMessage::TestTrigger(sats)) {
+                                eprintln!("Failed to send test trigger: {:?}", e);
+                            }
+                            // Effects will be added when the test trigger is processed via BoostReceived message
                         }
                     }
                 }
@@ -426,10 +425,15 @@ impl eframe::App for BlinkyBoostsApp {
             if self.recent_boosts.is_empty() {
                 ui.label("No recent boosts");
             } else {
-                for (source, amount, time) in &self.recent_boosts {
+                for (source, amount, effects, time) in &self.recent_boosts {
                     let elapsed = time.elapsed().as_secs();
                     ui.horizontal(|ui| {
-                        ui.label(format!("[{}s ago] {} sats from {}", elapsed, amount, source));
+                        let effects_str = if effects.is_empty() {
+                            "none".to_string()
+                        } else {
+                            effects.join(", ")
+                        };
+                        ui.label(format!("[{}s ago] {} sats from {} → {}", elapsed, amount, source, effects_str));
                     });
                 }
             }
@@ -464,7 +468,7 @@ impl eframe::App for BlinkyBoostsApp {
 }
 
 // Function to launch the GUI
-pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration
     let config = match crate::config::load_config() {
         Ok(cfg) => cfg,
@@ -482,7 +486,7 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
         }
     };
 
-    let app = BlinkyBoostsApp::new(config);
+    let app = BlinkyBoostsApp::new(config, tx, rx);
 
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
@@ -534,8 +538,6 @@ pub fn run_gui(rx: mpsc::Receiver<GuiMessage>) -> Result<(), Box<dyn std::error:
             style.visuals.widgets.active.bg_fill = Color32::from_rgb(60, 60, 60); // Lighter when active
             cc.egui_ctx.set_style(style);
 
-            let mut app = app;
-            app.rx = Arc::new(Mutex::new(rx));
             Box::new(app)
         }),
     )?;

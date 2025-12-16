@@ -102,12 +102,14 @@ async fn trigger_wled_effects(cfg: config::WLed, sats: i64) -> Result<()> {
     Ok(())
 }
 
-async fn trigger_effects(config: config::Config, sats: i64) -> Result<()> {
+async fn trigger_effects(config: config::Config, sats: i64) -> Result<Vec<String>> {
     println!("Triggering effects for {} sats", sats);
+    let mut triggered = Vec::new();
 
     if let Some(cfg) = config.wled {
         trigger_wled_effects(cfg, sats).await
             .context("Failed to trigger WLED effects")?;
+        triggered.push("WLED".to_string());
     }
 
     if let Some(cfg) = config.osc {
@@ -116,6 +118,7 @@ async fn trigger_effects(config: config::Config, sats: i64) -> Result<()> {
         let osc = osc::Osc::new(cfg.address.clone());
         osc.trigger_for_sats(sats)
             .context("Failed to trigger OSC")?;
+        triggered.push("OSC".to_string());
     }
 
     if let Some(cfg) = config.artnet {
@@ -124,9 +127,10 @@ async fn trigger_effects(config: config::Config, sats: i64) -> Result<()> {
         let artnet = artnet::ArtNet::new(cfg.address.clone(), cfg.universe);
         artnet?.trigger_for_sats(sats)
             .context("Failed to trigger Art-Net")?;
+        triggered.push("Art-Net".to_string());
     }
 
-    Ok(())
+    Ok(triggered)
 }
 
 async fn listen_for_zaps(config: config::Config, tx: tokio::sync::mpsc::Sender<GuiMessage>) {
@@ -161,12 +165,17 @@ async fn listen_for_zaps(config: config::Config, tx: tokio::sync::mpsc::Sender<G
 
             let sats = zap.value_msat_total / 1000;
             
-            // Send boost received message to GUI
-            let _ = tx.send(GuiMessage::BoostReceived("Zaps".to_string(), sats)).await;
-
-            if let Err(e) = trigger_effects(myconfig.clone(), sats).await {
-                eprintln!("Unable to trigger effects: {:#}", e);
-            }
+            // Trigger effects and get list of triggered effects
+            let effects = match trigger_effects(myconfig.clone(), sats).await {
+                Ok(effects) => effects,
+                Err(e) => {
+                    eprintln!("Unable to trigger effects: {:#}", e);
+                    Vec::new()
+                }
+            };
+            
+            // Send boost received message to GUI with effects
+            let _ = tx.send(GuiMessage::BoostReceived("Zaps".to_string(), sats, effects)).await;
         }
     }).await {
         Ok(_) => {},
@@ -229,12 +238,17 @@ async fn listen_for_boostboard(config: config::Config, tx: tokio::sync::mpsc::Se
 
             let sats = boost.value_msat_total / 1000;
             
-            // Send boost received message to GUI
-            let _ = tx.send(GuiMessage::BoostReceived("Boostboard".to_string(), sats)).await;
-
-            if let Err(e) = trigger_effects(myconfig.clone(), sats).await {
-                eprintln!("Unable to trigger effects: {:#}", e);
-            }
+            // Trigger effects and get list of triggered effects
+            let effects = match trigger_effects(myconfig.clone(), sats).await {
+                Ok(effects) => effects,
+                Err(e) => {
+                    eprintln!("Unable to trigger effects: {:#}", e);
+                    Vec::new()
+                }
+            };
+            
+            // Send boost received message to GUI with effects
+            let _ = tx.send(GuiMessage::BoostReceived("Boostboard".to_string(), sats, effects)).await;
         }
     }).await {
         Ok(_) => {},
@@ -285,12 +299,17 @@ async fn listen_for_nwc(config: config::Config, tx: tokio::sync::mpsc::Sender<Gu
 
             let sats = boost.value_msat_total / 1000;
             
-            // Send boost received message to GUI
-            let _ = tx.send(GuiMessage::BoostReceived("NWC".to_string(), sats)).await;
-
-            if let Err(e) = trigger_effects(myconfig.clone(), sats).await {
-                eprintln!("Unable to trigger effects: {:#}", e);
-            }
+            // Trigger effects and get list of triggered effects
+            let effects = match trigger_effects(myconfig.clone(), sats).await {
+                Ok(effects) => effects,
+                Err(e) => {
+                    eprintln!("Unable to trigger effects: {:#}", e);
+                    Vec::new()
+                }
+            };
+            
+            // Send boost received message to GUI with effects
+            let _ = tx.send(GuiMessage::BoostReceived("NWC".to_string(), sats, effects)).await;
         }
     }).await {
         Ok(_) => {},
@@ -362,9 +381,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match msg {
                 GuiMessage::TestTrigger(sats) => {
                     println!("Test trigger received for {} sats", sats);
-                    if let Err(e) = trigger_effects(config_for_tests.clone(), sats).await {
-                        eprintln!("Error triggering test effects: {:#}", e);
-                    }
+                    let effects = match trigger_effects(config_for_tests.clone(), sats).await {
+                        Ok(effects) => effects,
+                        Err(e) => {
+                            eprintln!("Error triggering test effects: {:#}", e);
+                            Vec::new()
+                        }
+                    };
+                    // Send boost received message to GUI with effects
+                    let _ = gui_tx.send(GuiMessage::BoostReceived("Test".to_string(), sats, effects)).await;
                 },
                 other => {
                     // Forward other messages to GUI
@@ -375,7 +400,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Run the GUI on the main thread
-    gui::run_gui(gui_rx)?;
+    // Pass the main tx so GUI can send test triggers to the handler
+    gui::run_gui(tx.clone(), gui_rx)?;
 
     Ok(())
 }
