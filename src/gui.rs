@@ -18,8 +18,8 @@ impl ComponentStatus {
     pub fn color(&self) -> Color32 {
         match self {
             ComponentStatus::Disabled => Color32::from_rgb(150, 150, 150), // Light grey for dark background
-            ComponentStatus::Enabled => Color32::from_rgb(255, 220, 100), // Bright yellow/gold for dark background
-            ComponentStatus::Running => Color32::from_rgb(100, 255, 100), // Bright green for dark background
+            ComponentStatus::Enabled => Color32::from_rgb(100, 255, 100), // Bright green for enabled
+            ComponentStatus::Running => Color32::from_rgb(100, 180, 255), // Bright blue for running
             ComponentStatus::Error(_) => Color32::from_rgb(255, 100, 100), // Bright red for dark background
         }
     }
@@ -492,21 +492,25 @@ impl eframe::App for BlinkyBoostsApp {
         ctx.request_repaint_after(Duration::from_millis(100));
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("BlinkyBoosts Control Panel");
+            ui.heading("BlinkyBoosts");
 
             ui.add_space(10.0);
 
-            // Component status section
-            ui.heading("Component Status");
-            ui.separator();
+            // Split components into input/output columns for quicker scanning
+            ui.columns(2, |columns| {
+                columns[0].heading("Inputs");
+                columns[0].separator();
+                self.render_component_status(&mut columns[0], "NWC");
+                self.render_component_status(&mut columns[0], "Boostboard");
+                self.render_component_status(&mut columns[0], "Zaps");
 
-            self.render_component_status(ui, "NWC");
-            self.render_component_status(ui, "Boostboard");
-            self.render_component_status(ui, "Zaps");
-            self.render_component_status(ui, "WLED");
-            self.render_component_status(ui, "OSC");
-            self.render_component_status(ui, "Art-Net");
-            self.render_component_status(ui, "sACN");
+                columns[1].heading("Outputs");
+                columns[1].separator();
+                self.render_component_status(&mut columns[1], "WLED");
+                self.render_component_status(&mut columns[1], "OSC");
+                self.render_component_status(&mut columns[1], "Art-Net");
+                self.render_component_status(&mut columns[1], "sACN");
+            });
 
             ui.add_space(20.0);
 
