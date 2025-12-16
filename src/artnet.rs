@@ -10,7 +10,8 @@ pub struct ArtNet {
 
 impl ArtNet {
     pub fn new(broadcast_address: String, universe: Option<u16>) -> Result<Self> {
-        let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?;
+        // Bind to 0.0.0.0 (all interfaces) instead of localhost to allow sending to different networks
+        let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))?;
         
         // Enable broadcast to allow sending to broadcast addresses
         sock.set_broadcast(true)?;
@@ -38,7 +39,8 @@ impl ArtNet {
         };
 
         let packet = ArtCommand::Output(output).write_to_buffer()?;
-        self.sock.send_to(&packet, self.to_addr)?;
+        self.sock.send_to(&packet, self.to_addr)
+            .map_err(|e| anyhow::anyhow!("Failed to send Art-Net packet to {}: {}. Make sure the broadcast address matches your network interface.", self.to_addr, e))?;
         Ok(())
     }
 
