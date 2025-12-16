@@ -9,13 +9,16 @@ pub struct ArtNet {
 }
 
 impl ArtNet {
-    pub fn new(address: String, universe: Option<u16>) -> Result<Self> {
+    pub fn new(broadcast_address: String, universe: Option<u16>) -> Result<Self> {
         let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?;
         
-        let to_addr = if address.contains(':') {
-            address.parse()?
+        // Enable broadcast to allow sending to broadcast addresses
+        sock.set_broadcast(true)?;
+
+        let to_addr = if broadcast_address.contains(':') {
+            broadcast_address.parse()?
         } else {
-            format!("{}:6454", address).parse()?
+            format!("{}:6454", broadcast_address).parse()?
         };
 
         Ok(Self {

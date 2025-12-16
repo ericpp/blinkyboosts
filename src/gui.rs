@@ -210,7 +210,7 @@ impl BlinkyBoostsApp {
                             self.modified_config.artnet = None;
                         } else if self.modified_config.artnet.is_none() {
                             self.modified_config.artnet = Some(ArtNet {
-                                address: "".to_string(),
+                                broadcast_address: "".to_string(),
                                 universe: Some(0),
                             });
                         }
@@ -348,8 +348,8 @@ impl BlinkyBoostsApp {
                     "Art-Net" => {
                         if let Some(artnet) = &mut self.modified_config.artnet {
                             ui.horizontal(|ui| {
-                                ui.label("Address:");
-                                if ui.text_edit_singleline(&mut artnet.address).changed() {
+                                ui.label("Broadcast Address:");
+                                if ui.text_edit_singleline(&mut artnet.broadcast_address).changed() {
                                     self.show_save_dialog = true;
                                 }
                             });

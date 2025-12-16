@@ -37,7 +37,7 @@ pub struct OSC {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ArtNet {
-    pub address: String,
+    pub broadcast_address: String,
     pub universe: Option<u16>,
 }
 
