@@ -16,7 +16,6 @@ struct BoostBoardEvent {
 pub struct BoostBoard {
     client: Client,
     pubkey: PublicKey,
-    sub_id: Option<String>,
 }
 
 impl BoostBoard {
@@ -34,7 +33,6 @@ impl BoostBoard {
         Ok(Self {
             client,
             pubkey,
-            sub_id: None,
         })
     }
 

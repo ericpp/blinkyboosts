@@ -101,12 +101,3 @@ pub fn load_config() -> Result<Config> {
 
     Ok(cfg)
 }
-
-pub fn save_config(config: &Config) -> Result<()> {
-    let filename = "./config.toml";
-    let toml_string = toml::to_string(config)
-        .context("Failed to serialize config to TOML")?;
-    fs::write(filename, toml_string)
-        .context(format!("Failed to write config to file: {}", filename))?;
-    Ok(())
-}

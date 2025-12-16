@@ -62,17 +62,4 @@ impl ArtNet {
         
         self.send_dmx(&data)
     }
-
-    pub fn send_custom(&self, channels: &[(usize, u8)]) -> Result<()> {
-        let mut data = vec![0u8; 512];
-        
-        for &(ch, val) in channels {
-            if ch > 0 && ch < 512 {
-                data[ch] = val;
-            }
-        }
-        
-        let len = data.iter().rposition(|&x| x != 0).unwrap_or(0) + 1;
-        self.send_dmx(&data[..len])
-    }
 }

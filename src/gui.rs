@@ -98,10 +98,6 @@ impl BlinkyBoostsApp {
         app
     }
 
-    pub fn sender(&self) -> mpsc::Sender<GuiMessage> {
-        self.tx.clone()
-    }
-
     fn save_config(&mut self) {
         // Save the modified config to file
         match toml::to_string(&self.modified_config) {

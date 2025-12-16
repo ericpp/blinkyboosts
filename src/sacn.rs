@@ -68,23 +68,4 @@ impl Sacn {
         
         self.send_dmx(&data)
     }
-
-    pub fn send_custom(&mut self, channels: &[(usize, u8)]) -> Result<()> {
-        let mut data = vec![0u8; 512];
-        
-        // DMX channels are 1-indexed, so channel 1 goes to index 0 in our data array
-        // (send_dmx will add the start code at the beginning)
-        for &(ch, val) in channels {
-            if ch > 0 && ch <= 512 {
-                data[ch - 1] = val;
-            }
-        }
-        
-        let len = data.iter().rposition(|&x| x != 0).map(|i| i + 1).unwrap_or(0);
-        if len > 0 {
-            self.send_dmx(&data[..len])
-        } else {
-            Ok(())
-        }
-    }
 }
