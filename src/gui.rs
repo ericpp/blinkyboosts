@@ -67,7 +67,7 @@ impl BlinkyBoostsApp {
             show_save_dialog: false,
             save_error: None,
             show_settings: std::collections::HashMap::new(),
-            test_sat_amount: String::new(),
+            test_sat_amount: "100".to_string(),
         };
 
         // Initialize component statuses
@@ -137,8 +137,6 @@ impl BlinkyBoostsApp {
             }
         }
 
-        // Remove boosts older than 30 seconds
-        self.recent_boosts.retain(|(_, _, _, time)| time.elapsed() < Duration::from_secs(30));
     }
 
     fn render_component_status(&mut self, ui: &mut Ui, component: &str) {
@@ -537,7 +535,7 @@ impl eframe::App for BlinkyBoostsApp {
             if self.recent_boosts.is_empty() {
                 ui.label("No recent boosts");
             } else {
-                for (source, amount, effects, time) in &self.recent_boosts {
+                for (source, amount, effects, time) in self.recent_boosts.iter().rev() {
                     let elapsed = time.elapsed().as_secs();
                     ui.horizontal(|ui| {
                         let effects_str = if effects.is_empty() {
