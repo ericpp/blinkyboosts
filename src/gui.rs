@@ -225,17 +225,78 @@ impl BlinkyBoostsApp {
                 self.show_save_dialog = true;
             }
 
-            // Settings button
-            if status != ComponentStatus::Disabled {
-                if ui.button("Settings").clicked() {
-                    let current = self.show_settings.get(component).cloned().unwrap_or(false);
-                    self.show_settings.insert(component.to_string(), !current);
+            // Settings button - always show, even when disabled
+            if ui.button("Settings").clicked() {
+                // If component is disabled and config doesn't exist, create it
+                if status == ComponentStatus::Disabled {
+                    match component {
+                        "NWC" => {
+                            if self.modified_config.nwc.is_none() {
+                                self.modified_config.nwc = Some(NWC { uri: "".to_string() });
+                                self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
+                            }
+                        },
+                        "Boostboard" => {
+                            if self.modified_config.boostboard.is_none() {
+                                self.modified_config.boostboard = Some(BoostBoard {
+                                    relay_addr: "".to_string(),
+                                    pubkey: "".to_string(),
+                                });
+                                self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
+                            }
+                        },
+                        "Zaps" => {
+                            if self.modified_config.zaps.is_none() {
+                                self.modified_config.zaps = Some(Zaps {
+                                    relay_addrs: vec!["".to_string()],
+                                    naddr: "".to_string(),
+                                });
+                                self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
+                            }
+                        },
+                        "WLED" => {
+                            if self.modified_config.wled.is_none() {
+                                self.modified_config.wled = Some(WLed {
+                                    host: "".to_string(),
+                                    boost_playlist: "BOOST".to_string(),
+                                    brightness: 128,
+                                    segments: None,
+                                    presets: None,
+                                    playlists: None,
+                                    setup: false,
+                                    force: false,
+                                });
+                                self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
+                            }
+                        },
+                        "OSC" => {
+                            if self.modified_config.osc.is_none() {
+                                self.modified_config.osc = Some(OSC {
+                                    address: "".to_string(),
+                                });
+                                self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
+                            }
+                        },
+                        "Art-Net" => {
+                            if self.modified_config.artnet.is_none() {
+                                self.modified_config.artnet = Some(ArtNet {
+                                    broadcast_address: "".to_string(),
+                                    universe: Some(0),
+                                });
+                                self.component_statuses.insert(component.to_string(), ComponentStatus::Enabled);
+                            }
+                        },
+                        _ => {}
+                    }
+                    self.show_save_dialog = true;
                 }
+                let current = self.show_settings.get(component).cloned().unwrap_or(false);
+                self.show_settings.insert(component.to_string(), !current);
             }
         });
 
-        // Show settings if expanded
-        if *self.show_settings.get(component).unwrap_or(&false) && status != ComponentStatus::Disabled {
+        // Show settings if expanded - now works even when disabled
+        if *self.show_settings.get(component).unwrap_or(&false) {
             ui.indent(component, |ui| {
                 match component {
                     "NWC" => {
