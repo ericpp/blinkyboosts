@@ -116,7 +116,8 @@ async fn trigger_effects(config: config::Config, sats: i64) -> Result<Vec<String
     if let Some(cfg) = config.osc {
         println!("Triggering OSC with value {}", sats);
 
-        let osc = osc::Osc::new(cfg.address.clone());
+        let osc = osc::Osc::new(cfg.address.clone())
+            .context("Failed to create OSC client")?;
         osc.trigger_for_sats(sats)
             .context("Failed to trigger OSC")?;
         triggered.push("OSC".to_string());

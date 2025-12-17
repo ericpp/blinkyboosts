@@ -9,21 +9,23 @@ pub struct Osc {
 }
 
 impl Osc {
-    pub fn new(address: String) -> Self {
-        let host_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
-        let sock = UdpSocket::bind(host_addr).expect("Unable to bind to host address");
-        let to_addr = address.parse::<SocketAddrV4>();
+    pub fn new(address: String) -> Result<Self> {
+        // Bind to all interfaces (0.0.0.0) to allow sending to any network interface
+        let host_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
+        let sock = UdpSocket::bind(host_addr)
+            .context("Unable to bind to host address")?;
+        
+        // Enable broadcast in case it's needed
+        sock.set_broadcast(true)
+            .context("Unable to enable broadcast")?;
 
-        if let Err(err) = &to_addr {
-            eprintln!("Unable to parse OSC address {}: {}", address, err);
-        }
+        let to_addr = address.parse::<SocketAddrV4>()
+            .context(format!("Unable to parse OSC address: {}", address))?;
 
-        let to_addr = to_addr.unwrap();
-
-        Self {
+        Ok(Self {
             sock,
             to_addr,
-        }
+        })
     }
 
     pub fn trigger_path(&self, path: String) -> Result<()> {
