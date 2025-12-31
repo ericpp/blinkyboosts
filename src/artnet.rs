@@ -59,7 +59,25 @@ impl ArtNet {
             ((sats / 256) % 256).max(1) as u8,
             ((sats / 65536) % 256).max(1) as u8,
         ];
-        
+
         self.send_dmx(&data)
+    }
+
+    pub fn trigger_channel(&self, channel: u16, value: u8) -> Result<()> {
+        anyhow::ensure!(channel > 0 && channel <= 512, "Channel must be between 1 and 512");
+
+        let mut data = vec![0u8; channel as usize];
+        data[(channel - 1) as usize] = value;
+
+        self.send_dmx(&data)
+    }
+
+    pub fn trigger_toggle(toggle: &crate::config::Toggle, default_universe: u16, broadcast_address: String, local_address: Option<String>) -> Result<()> {
+        let artnet_config = toggle.artnet.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Art-Net toggle missing 'artnet' configuration"))?;
+
+        let universe = artnet_config.universe.unwrap_or(default_universe);
+        let artnet = ArtNet::new(broadcast_address, local_address, Some(universe))?;
+        artnet.trigger_channel(artnet_config.channel, artnet_config.value)
     }
 }

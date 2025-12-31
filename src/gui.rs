@@ -1,8 +1,9 @@
-use crate::config::{Config, BoostBoard, NWC, OSC, ArtNet, Sacn, WLed, Zaps};
+use crate::config::{Config, BoostBoard, NWC, OSC, ArtNet, Sacn, WLed, Zaps, BoostFiltersConfig};
 use eframe::egui;
 use egui::{Color32, RichText, Ui, ViewportBuilder};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use chrono::Local;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,19 +38,23 @@ pub enum GuiMessage {
     UpdateStatus(String, ComponentStatus),
     BoostReceived(String, i64, Vec<String>),
     TestTrigger(i64),
+    UpdateSatTotal(i64),
+    StartListener(String),
+    StopListener(String),
 }
 
 pub struct BlinkyBoostsApp {
     config: Config,
     modified_config: Config,
     statuses: std::collections::HashMap<String, ComponentStatus>,
-    recent_boosts: Vec<(String, i64, Vec<String>, Instant)>,
+    recent_boosts: Vec<(String, i64, Vec<String>, chrono::DateTime<Local>)>,
     tx: mpsc::Sender<GuiMessage>,
     rx: Arc<Mutex<mpsc::Receiver<GuiMessage>>>,
     show_save_dialog: bool,
     save_error: Option<String>,
     expanded: std::collections::HashMap<String, bool>,
     test_amount: String,
+    sat_total: i64,
 }
 
 impl BlinkyBoostsApp {
@@ -81,6 +86,7 @@ impl BlinkyBoostsApp {
             save_error: None,
             expanded: std::collections::HashMap::new(),
             test_amount: "100".to_string(),
+            sat_total: 0,
         }
     }
 
@@ -108,9 +114,15 @@ impl BlinkyBoostsApp {
                         self.statuses.insert(comp, status);
                     }
                     GuiMessage::BoostReceived(src, amt, fx) => {
-                        self.recent_boosts.push((src, amt, fx, Instant::now()));
+                        self.recent_boosts.push((src, amt, fx, Local::now()));
                     }
                     GuiMessage::TestTrigger(_) => {}
+                    GuiMessage::UpdateSatTotal(total) => {
+                        self.sat_total = total;
+                    }
+                    GuiMessage::StartListener(_) | GuiMessage::StopListener(_) => {
+                        // These are handled by main.rs, not by the GUI
+                    }
                 }
             }
         }
@@ -118,42 +130,87 @@ impl BlinkyBoostsApp {
 
     fn toggle_component(&mut self, name: &str, enabled: bool) {
         let cfg = &mut self.modified_config;
+
+        // Get the current config value or create defaults
+        let orig_cfg = &self.config;
+
         match name {
-            "NWC" => cfg.nwc = if enabled { None } else { Some(NWC { uri: "".into() }) },
-            "Boostboard" => cfg.boostboard = if enabled { None } else { 
-                Some(BoostBoard { relay_addr: "".into(), pubkey: "".into() })
+            "NWC" => {
+                if enabled {
+                    cfg.nwc = None;
+                } else {
+                    cfg.nwc = Some(orig_cfg.nwc.clone().unwrap_or_else(||
+                        NWC { uri: "".into(), filters: BoostFiltersConfig::default() }
+                    ));
+                }
             },
-            "Zaps" => cfg.zaps = if enabled { None } else { 
-                Some(Zaps { relay_addrs: vec!["".into()], naddr: "".into() })
+            "Boostboard" => {
+                if enabled {
+                    cfg.boostboard = None;
+                } else {
+                    cfg.boostboard = Some(orig_cfg.boostboard.clone().unwrap_or_else(||
+                        BoostBoard { relay_addrs: vec![], pubkey: "".into(), filters: BoostFiltersConfig::default() }
+                    ));
+                }
             },
-            "WLED" => cfg.wled = if enabled { None } else { 
-                Some(WLed {
-                    host: "".into(),
-                    boost_playlist: "BOOST".into(),
-                    brightness: 128,
-                    segments: None,
-                    presets: None,
-                    playlists: None,
-                    setup: false,
-                    force: false,
-                })
+            "Zaps" => {
+                if enabled {
+                    cfg.zaps = None;
+                } else {
+                    cfg.zaps = Some(orig_cfg.zaps.clone().unwrap_or_else(||
+                        Zaps { relay_addrs: vec![], naddr: String::new(), load_since: None }
+                    ));
+                }
             },
-            "OSC" => cfg.osc = if enabled { None } else { Some(OSC { address: "".into() }) },
-            "Art-Net" => cfg.artnet = if enabled { None } else { 
-                Some(ArtNet {
-                    broadcast_address: "".into(),
-                    local_address: None,
-                    universe: Some(0),
-                })
+            "WLED" => {
+                if enabled {
+                    cfg.wled = None;
+                } else {
+                    cfg.wled = Some(orig_cfg.wled.clone().unwrap_or_else(||
+                        WLed {
+                            host: String::new(), boost_playlist: "BOOST".into(), brightness: 128,
+                            segments: None, presets: None, playlists: None, setup: false, force: false,
+                        }
+                    ));
+                }
             },
-            "sACN" => cfg.sacn = if enabled { None } else { 
-                Some(Sacn {
-                    broadcast_address: "".into(),
-                    universe: Some(1),
-                })
+            "OSC" => {
+                if enabled {
+                    cfg.osc = None;
+                } else {
+                    cfg.osc = Some(orig_cfg.osc.clone().unwrap_or_else(||
+                        OSC { address: String::new() }
+                    ));
+                }
+            },
+            "Art-Net" => {
+                if enabled {
+                    cfg.artnet = None;
+                } else {
+                    cfg.artnet = Some(orig_cfg.artnet.clone().unwrap_or_else(||
+                        ArtNet { broadcast_address: String::new(), local_address: None, universe: Some(0) }
+                    ));
+                }
+            },
+            "sACN" => {
+                if enabled {
+                    cfg.sacn = None;
+                } else {
+                    cfg.sacn = Some(orig_cfg.sacn.clone().unwrap_or_else(||
+                        Sacn { broadcast_address: String::new(), universe: Some(1) }
+                    ));
+                }
             },
             _ => return,
         }
+
+        // Send start/stop message to control the listener
+        if enabled {
+            let _ = self.tx.try_send(GuiMessage::StopListener(name.to_string()));
+        } else {
+            let _ = self.tx.try_send(GuiMessage::StartListener(name.to_string()));
+        }
+
         self.statuses.insert(
             name.to_string(),
             if enabled { ComponentStatus::Disabled } else { ComponentStatus::Enabled }
@@ -169,12 +226,12 @@ impl BlinkyBoostsApp {
             ui.set_height(20.0);
             ui.label(name);
             ui.label(RichText::new(status.text()).color(status.color()));
-            
+
             let btn_text = if enabled { "Disable" } else { "Enable" };
             if ui.add_sized([80.0, 20.0], egui::Button::new(btn_text)).clicked() {
                 self.toggle_component(name, enabled);
             }
-            
+
             if ui.add_sized([30.0, 20.0], egui::Button::new("⚙")).clicked() {
                 if !enabled {
                     self.toggle_component(name, false);
@@ -191,7 +248,7 @@ impl BlinkyBoostsApp {
 
     fn render_settings(&mut self, ui: &mut Ui, name: &str) {
         let changed = &mut self.show_save_dialog;
-        
+
         match name {
             "NWC" => {
                 if let Some(nwc) = &mut self.modified_config.nwc {
@@ -206,17 +263,31 @@ impl BlinkyBoostsApp {
             "Boostboard" => {
                 if let Some(bb) = &mut self.modified_config.boostboard {
                     ui.horizontal(|ui| {
-                        ui.label("Relay:");
-                        if ui.text_edit_singleline(&mut bb.relay_addr).changed() {
-                            *changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
                         ui.label("Pubkey:");
                         if ui.text_edit_singleline(&mut bb.pubkey).changed() {
                             *changed = true;
                         }
                     });
+                    ui.label("Relays:");
+                    let mut remove_idx = None;
+                    for (i, addr) in bb.relay_addrs.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.text_edit_singleline(addr).changed() {
+                                *changed = true;
+                            }
+                            if ui.button("✖").clicked() {
+                                remove_idx = Some(i);
+                            }
+                        });
+                    }
+                    if let Some(i) = remove_idx {
+                        bb.relay_addrs.remove(i);
+                        *changed = true;
+                    }
+                    if ui.button("+ Add").clicked() {
+                        bb.relay_addrs.push("".into());
+                        *changed = true;
+                    }
                 }
             }
             "Zaps" => {
@@ -349,6 +420,13 @@ impl eframe::App for BlinkyBoostsApp {
             ui.heading("BlinkyBoosts");
             ui.add_space(10.0);
 
+            // Display sat total
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Total Sats:").size(18.0));
+                ui.label(RichText::new(format!("{}", self.sat_total)).size(18.0).color(Color32::LIGHT_GREEN));
+            });
+            ui.add_space(10.0);
+
             ui.columns(2, |cols| {
                 cols[0].heading("Inputs");
                 cols[0].separator();
@@ -387,8 +465,9 @@ impl eframe::App for BlinkyBoostsApp {
             } else {
                 for (src, amt, fx, time) in self.recent_boosts.iter().rev() {
                     let fx_str = if fx.is_empty() { "none" } else { &fx.join(", ") };
-                    ui.label(format!("[{}s] {} sats from {} → {}", 
-                        time.elapsed().as_secs(), amt, src, fx_str));
+                    let time_str = time.format("%Y-%m-%d %H:%M:%S").to_string();
+                    ui.label(format!("[{}] {} sats from {} → {}",
+                        time_str, amt, src, fx_str));
                 }
             }
 
@@ -417,8 +496,8 @@ impl eframe::App for BlinkyBoostsApp {
     }
 }
 
-pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>) 
-    -> Result<(), Box<dyn std::error::Error>> 
+pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>)
+    -> Result<(), Box<dyn std::error::Error>>
 {
     let config = match crate::config::load_config() {
         Ok(cfg) => cfg,
@@ -432,10 +511,11 @@ pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>)
                 artnet: None,
                 sacn: None,
                 wled: None,
+                toggles: None,
             }
         }
     };
-    
+
     let app = BlinkyBoostsApp::new(config, tx, rx);
 
     eframe::run_native(
@@ -449,9 +529,9 @@ pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>)
         },
         Box::new(|cc| {
             let mut style = (*cc.egui_ctx.style()).clone();
-            style.text_styles.insert(egui::TextStyle::Body, 
+            style.text_styles.insert(egui::TextStyle::Body,
                 egui::FontId::new(16.0, egui::FontFamily::Proportional));
-            style.text_styles.insert(egui::TextStyle::Heading, 
+            style.text_styles.insert(egui::TextStyle::Heading,
                 egui::FontId::new(24.0, egui::FontFamily::Proportional));
             style.visuals = egui::Visuals::dark();
             cc.egui_ctx.set_style(style);

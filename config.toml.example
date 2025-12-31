@@ -384,3 +384,100 @@ durations = [10, 10, 10, 50]
 transitions = [7, 7, 7, 7]
 repeat = 1
 end = "Phantom Power 3"
+
+
+# ==============================================================================
+# Toggles - Advanced threshold-based triggering for different outputs
+# ==============================================================================
+# Toggles allow you to trigger specific effects based on boost amounts
+# They are evaluated in order - first matching threshold wins
+# If no thresholds match, default toggles (is_default = true) are triggered
+
+# OSC toggle examples - send commands to lighting consoles (GrandMA3, ETC, etc.)
+[[toggles]]
+threshold = 250_000  # Trigger when boost >= 250k sats
+output = "osc"
+path = "/gma3/cmd"
+arg_type = "string"  # Options: "string", "int", "float"
+arg_value = "Go+ Sequence 1"
+
+[[toggles]]
+threshold = 500_000
+output = "osc"
+path = "/gma3/cmd"
+arg_type = "string"
+arg_value = "Go+ Sequence 2"
+
+[[toggles]]
+threshold = 750_000
+output = "osc"
+path = "/gma3/cmd"
+arg_value = "Go+ Sequence 3"  # arg_type defaults to "string" if not specified
+
+[[toggles]]
+threshold = 1_000_000
+output = "osc"
+path = "/eos/cue/fire"
+arg_type = "int"
+arg_value = "10"  # Fire cue 10
+
+# Art-Net toggle examples - set specific DMX channels
+[[toggles]]
+threshold = 100_000
+output = "artnet"
+channel = 1  # DMX channel 1-512
+value = 255  # DMX value 0-255
+# universe = 2  # Optional - uses artnet config universe if not specified
+
+[[toggles]]
+threshold = 150_000
+output = "artnet"
+channel = 5
+value = 128
+universe = 1  # Override default universe
+
+# sACN toggle examples - set specific DMX channels
+[[toggles]]
+threshold = 200_000
+output = "sacn"
+channel = 10
+value = 255
+# universe = 3  # Optional - uses sacn config universe if not specified
+
+[[toggles]]
+threshold = 350_000
+output = "sacn"
+channel = 20
+value = 192
+universe = 2
+
+# WLED toggle examples - trigger specific presets/playlists
+[[toggles]]
+threshold = 300_000
+output = "wled"
+preset = "BOOST-3"  # Must match a preset/playlist name in WLED config
+
+[[toggles]]
+threshold = 600_000
+output = "wled"
+preset = "Bowl After Bowl Anim"
+
+# Default toggles - triggered when no threshold matches
+# Perfect for handling small boosts or creating catch-all effects
+[[toggles]]
+is_default = true
+output = "wled"
+preset = "BOOST-0"  # Generic boost effect for any amount not matched above
+
+# You can have multiple default toggles for different outputs
+# [[toggles]]
+# is_default = true
+# output = "osc"
+# path = "/gma3/cmd"
+# arg_value = "Go+ Sequence 99"
+
+# [[toggles]]
+# is_default = true
+# output = "artnet"
+# channel = 1
+# value = 100

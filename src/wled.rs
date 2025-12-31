@@ -19,7 +19,7 @@ pub struct Effect {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct JsonPreset {
     pub n: String,
 
@@ -36,46 +36,51 @@ struct JsonPreset {
     pub playlist: Option<JsonPlaylist>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 enum JsonSegmentEnum {
     Segment(JsonSegment),
     Empty { stop: u64 },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
 struct JsonSegment {
-    pub id: u64,
-    pub start: u64,
-    pub stop: u64,
-    pub grp: u64,
-    pub spc: u64,
-    pub of: u64,
-    pub on: bool,
-    pub frz: bool,
-    pub bri: u64,
-    pub cct: u64,
-    pub set: u64,
-    pub n: String,
-    pub col: Vec<Vec<u64>>,
-    pub fx: u64,
-    pub sx: u64,
-    pub ix: u64,
-    pub pal: u64,
-    pub c1: u64,
-    pub c2: u64,
-    pub c3: u64,
-    pub sel: bool,
-    pub rev: bool,
-    pub mi: bool,
-    pub o1: bool,
-    pub o2: bool,
-    pub o3: bool,
-    pub si: u64,
-    pub m12: u64,
+    #[serde(default)] pub id: u64,
+    #[serde(default)] pub start: u64,
+    #[serde(default)] pub stop: u64,
+    #[serde(default = "default_one")] pub grp: u64,
+    #[serde(default)] pub spc: u64,
+    #[serde(default)] pub of: u64,
+    #[serde(default = "default_true")] pub on: bool,
+    #[serde(default)] pub frz: bool,
+    #[serde(default)] pub bri: u64,
+    #[serde(default = "default_cct")] pub cct: u64,
+    #[serde(default)] pub set: u64,
+    #[serde(default)] pub n: String,
+    #[serde(default)] pub col: Vec<Vec<u64>>,
+    #[serde(default)] pub fx: u64,
+    #[serde(default = "default_128")] pub sx: u64,
+    #[serde(default = "default_128")] pub ix: u64,
+    #[serde(default)] pub pal: u64,
+    #[serde(default)] pub c1: u64,
+    #[serde(default)] pub c2: u64,
+    #[serde(default)] pub c3: u64,
+    #[serde(default = "default_true")] pub sel: bool,
+    #[serde(default)] pub rev: bool,
+    #[serde(default)] pub mi: bool,
+    #[serde(default)] pub o1: bool,
+    #[serde(default)] pub o2: bool,
+    #[serde(default)] pub o3: bool,
+    #[serde(default)] pub si: u64,
+    #[serde(default)] pub m12: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+fn default_one() -> u64 { 1 }
+fn default_true() -> bool { true }
+fn default_128() -> u64 { 128 }
+fn default_cct() -> u64 { 127 }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct JsonPlaylist {
     pub ps: Vec<u64>,
     pub dur: Vec<u64>,
@@ -145,19 +150,10 @@ impl WLed {
     }
 
     pub fn get_preset_id(&self, name: &str) -> u64 {
-        let lists = self.presets.clone();
-        let found = lists.clone().into_iter().find(|ps| ps.name == name);
-        let max = lists.clone().into_iter().map(|ps| ps.id).max();
-
-        if let Some(found) = found {
-            return found.id
-        }
-
-        if let Some(max) = max {
-            return max + 1
-        }
-
-        1
+        self.presets.iter()
+            .find(|ps| ps.name == name)
+            .map(|ps| ps.id)
+            .unwrap_or_else(|| self.presets.iter().map(|ps| ps.id).max().map(|m| m + 1).unwrap_or(1))
     }
 
     pub async fn set_preset(&mut self, index: usize, config: &config::WLed, preset: &config::WLedPreset) -> Result<bool> {
@@ -168,68 +164,29 @@ impl WLed {
 
         let mut segs = vec![];
 
+        let black = vec![0, 0, 0];
         for s in 0..32 {
             if s < preset.colors.len() {
-                let segment = segments[s].clone();
-                let pset = preset.clone();
-
-                let colors1 = pset.colors[s].clone();
-                let colors2 = if let Some(colors) = &pset.colors2 {
-                    if s < colors.len() {
-                        colors[s].clone()
-                    } else {
-                        vec![0, 0, 0]
-                    }
-                } else {
-                    vec![0, 0, 0]
+                let segment = &segments[s];
+                let get_color = |colors: &Option<Vec<Vec<u64>>>| {
+                    colors.as_ref().and_then(|c| c.get(s).cloned()).unwrap_or_else(|| black.clone())
                 };
 
-                let colors3 = if let Some(colors) = &pset.colors3 {
-                    if s < colors.len() {
-                        colors[s].clone()
-                    } else {
-                        vec![0, 0, 0]
-                    }
-                } else {
-                    vec![0, 0, 0]
-                };
-
-                let effect_id = self.get_effect_id(&pset.effects[s]);
-
-                let seg = JsonSegment {
+                segs.push(JsonSegmentEnum::Segment(JsonSegment {
                     id: s as u64,
                     start: segment.start,
                     stop: segment.stop,
                     grp: segment.grouping.unwrap_or(1),
-                    spc: 0,
-                    of: 0,
-                    on: true,
-                    frz: false,
                     bri: config.brightness,
-                    cct: 127,
-                    set: 0,
                     n: segment.name.clone(),
-                    col: vec![colors1, colors2, colors3],
-                    fx: effect_id,
-                    sx: pset.speed.unwrap_or(128),
-                    ix: pset.intensity.unwrap_or(128),
-                    pal: 0,
-                    c1: 0,
-                    c2: 0,
-                    c3: 0,
-                    sel: true,
+                    col: vec![preset.colors[s].clone(), get_color(&preset.colors2), get_color(&preset.colors3)],
+                    fx: self.get_effect_id(&preset.effects[s]),
+                    sx: preset.speed.unwrap_or(128),
+                    ix: preset.intensity.unwrap_or(128),
                     rev: segment.reverse.unwrap_or(false),
-                    mi: false,
-                    o1: false,
-                    o2: false,
-                    o3: false,
-                    si: 0,
-                    m12: 0,
-                };
-
-                segs.push(JsonSegmentEnum::Segment(seg));
-            }
-            else {
+                    ..Default::default()
+                }));
+            } else {
                 segs.push(JsonSegmentEnum::Empty { stop: 0 });
             }
         }
@@ -282,15 +239,11 @@ impl WLed {
 
     fn compare_preset(&self, preset: &JsonPreset) -> bool {
         let id = preset.psave.unwrap();
-        let exists = self.raw_presets.get(&id);
-
-        if exists.is_none() {
-            return false;
+        if let Some(existing) = self.raw_presets.get(&id) {
+            preset == existing
+        } else {
+            false
         }
-
-        let exists = exists.unwrap();
-
-        compare_presets(preset, exists)
     }
 
     pub async fn set_playlist(&mut self, index: usize, config: &config::WLed, playlist: &config::WLedPlaylist) -> Result<bool> {
@@ -344,7 +297,22 @@ impl WLed {
 
     pub async fn run_preset_id(&self, preset_id: u64) -> Result<()> {
         set_state(&self.host, json!({"ps": preset_id})).await
-            .context(format!("Failed to set state for preset ID: {}", preset_id))
+    }
+
+    pub async fn trigger_toggle(toggle: &crate::config::Toggle, host: &str) -> Result<()> {
+        let wled_config = toggle.wled.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("WLED toggle missing 'wled' configuration"))?;
+
+        let mut wled = WLed::new();
+        wled.load(host).await
+            .context("Failed to load WLED for toggle")?;
+
+        if let Some(preset) = wled.get_preset(&wled_config.preset) {
+            wled.run_preset(preset).await
+                .context(format!("Failed to run WLED preset: {}", wled_config.preset))
+        } else {
+            Err(anyhow::anyhow!("WLED preset not found: {}", wled_config.preset))
+        }
     }
 }
 
@@ -363,7 +331,7 @@ async fn get_effects(host: &str) -> Result<Vec<Effect>> {
         .map(|(id, name)| {
             let name_str = name.as_str()
                 .ok_or_else(|| anyhow::anyhow!("Effect name is not a string: {}", name))?;
-            
+
             Ok(Effect {
                 id: id as u64,
                 name: name_str.to_string(),
@@ -431,102 +399,4 @@ async fn set_state(host: &str, json: Value) -> Result<()> {
     println!("Response: {}", body);
 
     Ok(())
-}
-
-
-fn compare_presets(preset: &JsonPreset, compare_to: &JsonPreset) -> bool {
-    if preset.n != compare_to.n {
-        return false;
-    }
-
-    if preset.seg.len() != compare_to.seg.len() {
-        return false;
-    }
-
-    for (item, compare) in preset.seg.iter().zip(compare_to.seg.iter()) {
-        if !compare_segments(&item, compare) {
-            return false;
-        }
-    }
-
-    match (preset.playlist.as_ref(), compare_to.playlist.as_ref()) {
-        (Some(pl1), Some(pl2)) => compare_playlists(pl1, pl2),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn compare_segments(segment: &JsonSegmentEnum, compare_to: &JsonSegmentEnum) -> bool {
-    let (seg1, seg2) = match (segment, compare_to) {
-        (JsonSegmentEnum::Empty { .. }, JsonSegmentEnum::Empty { .. }) => (None, None),
-        (JsonSegmentEnum::Segment(s), JsonSegmentEnum::Empty { .. }) => (Some(s), None),
-        (JsonSegmentEnum::Empty { .. }, JsonSegmentEnum::Segment(s)) => (None, Some(s)),
-        (JsonSegmentEnum::Segment(s1), JsonSegmentEnum::Segment(s2)) => (Some(s1), Some(s2)),
-    };
-
-    if seg1.is_none() && seg2.is_none() {
-        return true; // assume same
-    }
-
-    if seg1.is_none() || seg2.is_none() {
-        return false; // different
-    }
-
-    let seg1 = seg1.unwrap();
-    let seg2 = seg2.unwrap();
-
-    if seg1.n != seg2.n || seg1.rev != seg2.rev || seg1.grp != seg2.grp ||
-        seg1.fx != seg2.fx || seg1.sx != seg2.sx || seg1.ix != seg2.ix ||
-        seg1.frz != seg2.frz || seg1.bri != seg2.bri || seg1.sel != seg2.sel {
-
-        return false;
-    }
-
-    for (col1, col2) in seg1.col.iter().zip(&seg2.col) {
-        if col1[0] != col2[0] || col1[1] != col2[1] || col1[2] != col2[2] {
-            return false;
-        }
-    }
-
-    true
-}
-
-
-fn compare_playlists(playlist: &JsonPlaylist, compare_to: &JsonPlaylist) -> bool {
-
-    if playlist.repeat != compare_to.repeat || playlist.end != compare_to.end || playlist.r != compare_to.r {
-        return false;
-    }
-
-    if playlist.ps.len() != compare_to.ps.len() {
-        return false;
-    }
-
-    for (ps1, ps2) in playlist.ps.iter().zip(compare_to.ps.iter()) {
-        if ps1 != ps2 {
-            return false;
-        }
-    }
-
-    if playlist.dur.len() != compare_to.dur.len() {
-        return false;
-    }
-
-    for (dur1, dur2) in playlist.dur.iter().zip(compare_to.dur.iter()) {
-        if dur1 != dur2 {
-            return false;
-        }
-    }
-
-    if playlist.transition.len() != compare_to.transition.len() {
-        return false;
-    }
-
-    for (tran1, tran2) in playlist.transition.iter().zip(compare_to.transition.iter()) {
-        if tran1 != tran2 {
-            return false;
-        }
-    }
-
-    true
 }

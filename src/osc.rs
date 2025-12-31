@@ -1,6 +1,5 @@
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use rosc::{OscMessage, OscPacket, OscType};
-use rosc::encoder;
+use rosc::{OscMessage, OscPacket, OscType, encoder};
 use anyhow::{Context, Result, anyhow};
 
 pub struct Osc {
@@ -9,54 +8,49 @@ pub struct Osc {
 }
 
 impl Osc {
-    pub fn new(address: String) -> Result<Self> {
-        // Bind to all interfaces (0.0.0.0) to allow sending to any network interface
-        let host_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
-        let sock = UdpSocket::bind(host_addr)
+    pub fn new(address: &str) -> Result<Self> {
+        let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
             .context("Unable to bind to host address")?;
-        
-        // Enable broadcast in case it's needed
+
         sock.set_broadcast(true)
             .context("Unable to enable broadcast")?;
 
-        let to_addr = address.parse::<SocketAddrV4>()
-            .context(format!("Unable to parse OSC address: {}", address))?;
+        let to_addr = address.parse()
+            .with_context(|| format!("Unable to parse OSC address: {}", address))?;
 
-        Ok(Self {
-            sock,
-            to_addr,
-        })
+        Ok(Self { sock, to_addr })
     }
 
-    pub fn trigger_path(&self, path: String) -> Result<()> {
-        println!("Triggering OSC path: {}", path);
+    pub fn trigger_path(&self, path: &str, args: Vec<OscType>) -> Result<()> {
+        println!("Triggering OSC path with args: {} {:?}", path, args);
 
         let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-            addr: path.clone(),
-            args: vec![OscType::Int(255)],
+            addr: path.to_string(),
+            args,
         }))
-        .context(format!("Failed to encode OSC message for path: {}", path))?;
+        .with_context(|| format!("Failed to encode OSC message for path: {}", path))?;
 
         self.sock.send_to(&msg_buf, self.to_addr)
-            .context(format!("Failed to send OSC message to {}", self.to_addr))?;
+            .with_context(|| format!("Failed to send OSC message to {}", self.to_addr))?;
 
         Ok(())
     }
 
     pub fn trigger_for_sats(&self, sats: i64) -> Result<()> {
-        self.trigger_path("/boost".to_string())
-            .context("Failed to trigger base boost path")?;
-            
-        self.trigger_path(format!("/boost/{}", sats))
-            .context(format!("Failed to trigger boost path for {} sats", sats))?;
+        // Send the sats value as an integer to the /boost path
+        self.trigger_path("/boost", vec![OscType::Int(sats as i32)])
+    }
 
-        let sats_str = sats.to_string();
-        let endswith = sats_str.chars().last()
-            .ok_or_else(|| anyhow!("Sats value has no digits"))?;
+    pub fn trigger_toggle(&self, toggle: &crate::config::Toggle) -> Result<()> {
+        let osc_config = toggle.osc.as_ref()
+            .ok_or_else(|| anyhow!("OSC toggle missing 'osc' configuration"))?;
 
-        self.trigger_path(format!("/boost/endswith/{}", endswith))
-            .context(format!("Failed to trigger endswith path for digit {}", endswith))?;
+        let arg = match &osc_config.arg_value {
+            crate::config::OscArgValue::String(s) => OscType::String(s.clone()),
+            crate::config::OscArgValue::Int(i) => OscType::Int(*i as i32),
+            crate::config::OscArgValue::Float(f) => OscType::Float(*f as f32),
+        };
 
-        Ok(())
+        self.trigger_path(&osc_config.path, vec![arg])
     }
 }

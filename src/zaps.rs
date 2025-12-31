@@ -45,21 +45,15 @@ impl Zaps {
     }
 
     pub async fn subscribe(&self, since: Option<Timestamp>) -> Result<SubscriptionId> {
-        let ts = match since {
-            Some(ts) => ts,
-            None => Timestamp::from_secs(0),
-        };
-
         let subscription = Filter::new()
             .coordinate(&self.naddr)
             .kind(Kind::ZapReceipt)
-            .since(ts);
+            .since(since.unwrap_or_else(|| Timestamp::from_secs(0)));
 
-        // Subscribe (auto generate subscription ID)
-        let Output { val: sub_id_1, .. } = self.client.subscribe(vec![subscription], None).await
+        let Output { val: sub_id, .. } = self.client.subscribe(vec![subscription], None).await
             .context("Failed to subscribe to zaps")?;
 
-        Ok(sub_id_1)
+        Ok(sub_id)
     }
 
     pub async fn subscribe_zaps<F, Fut>(&self, since: Option<Timestamp>, func: F) -> Result<()>
