@@ -99,34 +99,62 @@ async fn trigger_toggles(
     // Get the last digit of sats for endswith_range checks
     let last_digit = (sats % 10).abs() as u8;
 
-    // First pass: process non-default toggles (threshold-based or endswith_range-only)
-    for toggle in toggles.iter().filter(|t| !t.is_default) {
-        // Check if this toggle should trigger based on threshold or endswith_range
-        let mut should_trigger = false;
+    // Get all threshold-based toggles with use_total = true
+    let threshold_toggles: Vec<_> = toggles.iter()
+        .filter(|t| !t.is_default && t.use_total && t.threshold > 0)
+        .collect();
 
-        // If there's a threshold, check it
-        if toggle.threshold > 0 {
-            should_trigger = check_total_threshold(tracker.as_ref(), toggle.threshold, toggle.trigger_multiple, sats).await;
-        } else if toggle.endswith_range.is_some() {
-            // No threshold, but has endswith_range - always consider for triggering
-            should_trigger = true;
-        }
+    // If we have threshold toggles and a tracker, check which thresholds should trigger
+    if !threshold_toggles.is_empty() {
+        if let Some(tracker_ref) = tracker.as_ref() {
+            // Collect all thresholds and find the maximum
+            let all_thresholds: Vec<i64> = threshold_toggles.iter().map(|t| t.threshold).collect();
+            let max_threshold = *all_thresholds.iter().max().unwrap();
 
-        if should_trigger {
-            // Check endswith_range if specified
-            if let Some((start, end)) = toggle.endswith_range {
-                if last_digit < start || last_digit > end {
-                    println!("Toggle skipped: {} sats ends with {}, not in range {}-{}", sats, last_digit, start, end);
-                    continue;
+            // Get the thresholds to trigger
+            let mut tracker_guard = tracker_ref.lock().await;
+            let thresholds_to_trigger = tracker_guard.get_thresholds_to_trigger(
+                sats,
+                &all_thresholds,
+                max_threshold
+            );
+            drop(tracker_guard);
+
+            // If multiple thresholds crossed, only trigger the maximum one
+            if !thresholds_to_trigger.is_empty() {
+                any_triggered = true;
+
+                // Find the maximum threshold that was crossed
+                let max_crossed_threshold = *thresholds_to_trigger.iter().max().unwrap();
+
+                if thresholds_to_trigger.len() > 1 {
+                    println!("Multiple thresholds crossed ({:?}), applying only maximum: {} sats", thresholds_to_trigger, max_crossed_threshold);
+                } else {
+                    println!("Triggering threshold: {} sats", max_crossed_threshold);
                 }
-            }
 
-            any_triggered = true;
+                // Find the toggle with the maximum threshold
+                if let Some(toggle) = threshold_toggles.iter().find(|t| t.threshold == max_crossed_threshold) {
+                    // Check endswith_range if specified
+                    let should_trigger = if let Some((start, end)) = toggle.endswith_range {
+                        if last_digit < start || last_digit > end {
+                            println!("Toggle skipped: {} sats threshold ends with {}, not in range {}-{}", max_crossed_threshold, last_digit, start, end);
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
+                    };
 
-            if let Err(e) = trigger_single_toggle(config, toggle).await {
-                eprintln!("Failed to trigger toggle: {:#}", e);
-            } else {
-                triggered_effects.push(format_toggle_description(toggle));
+                    if should_trigger {
+                        if let Err(e) = trigger_single_toggle(config, toggle).await {
+                            eprintln!("Failed to trigger toggle at {} sats: {:#}", max_crossed_threshold, e);
+                        } else {
+                            triggered_effects.push(format_toggle_description(toggle));
+                        }
+                    }
+                }
             }
         }
     }
@@ -195,41 +223,6 @@ fn format_toggle_description(toggle: &config::Toggle) -> String {
     }
 }
 
-async fn check_total_threshold(
-    tracker: Option<&Arc<Mutex<sat_tracker::SatTracker>>>,
-    threshold: i64,
-    trigger_multiple: bool,
-    boost_amount: i64
-) -> bool {
-    let Some(tracker_ref) = tracker else {
-        return false;
-    };
-
-    let mut tracker_guard = tracker_ref.lock().await;
-    let new_total = tracker_guard.get_total();
-    let previous_total = new_total - boost_amount;
-    let should_trigger = tracker_guard.should_trigger_threshold(previous_total, new_total, threshold, trigger_multiple);
-
-    if should_trigger {
-        tracker_guard.update_last_triggered_threshold(threshold, trigger_multiple);
-        if trigger_multiple {
-            let multiple = new_total / threshold;
-            let threshold_value = multiple * threshold;
-            println!(
-                "Toggle triggered: {} total sats crossed {} threshold (multiple {}, threshold {})",
-                new_total, threshold, multiple, threshold_value
-            );
-        } else {
-            println!(
-                "Toggle triggered: {} total sats >= {} threshold",
-                new_total, threshold
-            );
-        }
-    }
-
-    should_trigger
-}
-
 async fn trigger_single_toggle(config: &config::Config, toggle: &config::Toggle) -> Result<()> {
     match toggle.output.to_lowercase().as_str() {
         "osc" => {
@@ -292,14 +285,15 @@ async fn sync_threshold_triggers(
     tracker: &Arc<Mutex<sat_tracker::SatTracker>>
 ) {
     if let Some(toggles) = &config.toggles {
-        let thresholds: Vec<(i64, bool)> = toggles.iter()
-            .filter(|t| !t.is_default && t.use_total)
-            .map(|t| (t.threshold, t.trigger_multiple))
+        let thresholds: Vec<i64> = toggles.iter()
+            .filter(|t| !t.is_default && t.use_total && t.threshold > 0)
+            .map(|t| t.threshold)
             .collect();
 
         if !thresholds.is_empty() {
+            let max_threshold = *thresholds.iter().max().unwrap();
             let mut tracker_guard = tracker.lock().await;
-            tracker_guard.sync_trigger_state(&thresholds);
+            tracker_guard.sync_trigger_state(max_threshold);
         }
     }
 }
