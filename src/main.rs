@@ -20,67 +20,92 @@ mod sat_tracker;
 
 use gui::{ComponentStatus, GuiMessage};
 
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
 fn parse_timestamp(s: &str) -> Result<Timestamp> {
     s.parse::<u64>()
         .map(Timestamp::from_secs)
         .context("Failed to parse timestamp as unix seconds")
 }
 
-async fn setup_effects(config: config::Config) -> Result<()> {
-    let Some(cfg) = config.wled else {
-        return Ok(());
-    };
+fn parse_load_since(load_since_str: Option<&String>, default: Timestamp) -> Timestamp {
+    load_since_str
+        .and_then(|s| parse_timestamp(s).ok().inspect(|_| println!("Loading since: {}", s)))
+        .unwrap_or(default)
+}
 
-    if !cfg.setup {
-        return Ok(());
-    }
+// ============================================================================
+// Effects Setup & Triggering
+// ============================================================================
+
+async fn setup_effects(config: config::Config) -> Result<()> {
+    let Some(cfg) = config.wled else { return Ok(()) };
+    if !cfg.setup { return Ok(()) };
 
     let mut wled = wled::WLed::new();
-    wled.load(&cfg.host).await
-        .context("Unable to load from WLED")?;
+    wled.load(&cfg.host).await.context("Unable to load from WLED")?;
 
     if let Some(presets) = &cfg.presets {
         for (idx, preset) in presets.iter().enumerate() {
-            wled.set_preset(idx, &cfg, preset).await
-                .context("Failed to set WLED preset")?;
+            wled.set_preset(idx, &cfg, preset).await?;
         }
     }
 
     if let Some(playlists) = &cfg.playlists {
         for (idx, playlist) in playlists.iter().enumerate() {
-            wled.set_playlist(idx, &cfg, playlist).await
-                .context("Failed to set WLED playlist")?;
+            wled.set_playlist(idx, &cfg, playlist).await?;
         }
     }
 
     Ok(())
 }
 
-async fn trigger_wled_effects(cfg: config::WLed, sats: i64) -> Result<()> {
-    let number_playlist = format!("BOOST-{}", sats);
-    let endnum = sats.to_string().chars().last().unwrap();
-    let endnum_playlist = format!("BOOST-{}", endnum);
-
-    let mut wled = wled::WLed::new();
-    wled.load(&cfg.host).await
-        .context("Failed to load WLED configuration")?;
-
-    // Try to find playlist in order of specificity
-    let playlist = wled.get_preset(&number_playlist)
-        .or_else(|| wled.get_preset(&endnum_playlist))
-        .or_else(|| wled.get_preset(&cfg.boost_playlist));
-
-    if let Some(playlist) = playlist {
-        println!("Triggering WLED playlist {}", playlist.name);
-        wled.run_preset(playlist).await
-            .context("Failed to run WLED preset")?;
-    } else {
-        eprintln!(
-            "Unable to find WLED playlist matching {}, {}, or {}",
-            number_playlist, endnum_playlist, cfg.boost_playlist
-        );
+fn format_toggle_description(toggle: &config::Toggle) -> String {
+    match toggle.output.to_lowercase().as_str() {
+        "osc" => toggle.osc.as_ref().map_or("OSC".to_string(), |osc| {
+            use crate::config::OscArgValue;
+            let value_str = match &osc.arg_value {
+                OscArgValue::String(s) => format!("\"{}\"", s),
+                OscArgValue::Int(i) => i.to_string(),
+                OscArgValue::Float(f) => f.to_string(),
+            };
+            format!("OSC {}: {}", osc.path, value_str)
+        }),
+        "artnet" => toggle.artnet.as_ref()
+            .map_or("Art-Net".to_string(), |a| format!("Art-Net ch{}: {}", a.channel, a.value)),
+        "sacn" => toggle.sacn.as_ref()
+            .map_or("sACN".to_string(), |s| format!("sACN ch{}: {}", s.channel, s.value)),
+        "wled" => toggle.wled.as_ref()
+            .map_or("WLED".to_string(), |w| format!("WLED: {}", w.preset)),
+        _ => toggle.output.clone()
     }
+}
 
+async fn trigger_single_toggle(config: &config::Config, toggle: &config::Toggle) -> Result<()> {
+    match toggle.output.to_lowercase().as_str() {
+        "osc" => {
+            let osc_cfg = config.osc.as_ref().context("OSC not configured")?;
+            osc::Osc::new(&osc_cfg.address)?.trigger_toggle(toggle)?;
+        },
+        "artnet" => {
+            let cfg = config.artnet.as_ref().context("Art-Net not configured")?;
+            artnet::ArtNet::trigger_toggle(
+                toggle, cfg.universe.unwrap_or(0),
+                cfg.broadcast_address.clone(), cfg.local_address.clone()
+            )?;
+        },
+        "sacn" => {
+            let cfg = config.sacn.as_ref().context("sACN not configured")?;
+            sacn::Sacn::trigger_toggle(toggle, cfg.universe.unwrap_or(1), cfg.broadcast_address.clone())?;
+        },
+        "wled" => {
+            let cfg = config.wled.as_ref().context("WLED not configured")?;
+            wled::WLed::trigger_toggle(toggle, &cfg.host).await?;
+        },
+        _ => eprintln!("Unknown toggle output type: {}", toggle.output),
+    }
     Ok(())
 }
 
@@ -89,213 +114,85 @@ async fn trigger_toggles(
     sats: i64,
     tracker: Option<Arc<Mutex<sat_tracker::SatTracker>>>
 ) -> Result<Vec<String>> {
-    let Some(toggles) = &config.toggles else {
-        return Ok(Vec::new());
-    };
+    let Some(toggles) = &config.toggles else { return Ok(Vec::new()) };
 
-    let mut any_triggered = false;
+    let last_digit = (sats % 10).abs() as u8;
     let mut triggered_effects = Vec::new();
 
-    // Get the last digit of sats for endswith_range checks
-    let last_digit = (sats % 10).abs() as u8;
-
-    // Get all threshold-based toggles with use_total = true
+    // Check threshold-based toggles
     let threshold_toggles: Vec<_> = toggles.iter()
         .filter(|t| !t.is_default && t.use_total && t.threshold > 0)
         .collect();
 
-    // If we have threshold toggles and a tracker, check which thresholds should trigger
-    if !threshold_toggles.is_empty() {
+    let threshold_triggered = if !threshold_toggles.is_empty() {
         if let Some(tracker_ref) = tracker.as_ref() {
-            // Collect all thresholds and find the maximum
             let all_thresholds: Vec<i64> = threshold_toggles.iter().map(|t| t.threshold).collect();
             let max_threshold = *all_thresholds.iter().max().unwrap();
 
-            // Get the thresholds to trigger
             let mut tracker_guard = tracker_ref.lock().await;
-            let thresholds_to_trigger = tracker_guard.get_thresholds_to_trigger(
-                sats,
-                &all_thresholds,
-                max_threshold
-            );
+            let thresholds_to_trigger = tracker_guard.get_thresholds_to_trigger(sats, &all_thresholds, max_threshold);
             drop(tracker_guard);
 
-            // If multiple thresholds crossed, only trigger the maximum one
-            if !thresholds_to_trigger.is_empty() {
-                any_triggered = true;
-
-                // Find the maximum threshold that was crossed
-                let max_crossed_threshold = *thresholds_to_trigger.iter().max().unwrap();
-
+            if let Some(&max_crossed) = thresholds_to_trigger.iter().max() {
                 if thresholds_to_trigger.len() > 1 {
-                    println!("Multiple thresholds crossed ({:?}), applying only maximum: {} sats", thresholds_to_trigger, max_crossed_threshold);
+                    println!("Multiple thresholds crossed ({:?}), applying only maximum: {} sats", thresholds_to_trigger, max_crossed);
                 } else {
-                    println!("Triggering threshold: {} sats", max_crossed_threshold);
+                    println!("Triggering threshold: {} sats", max_crossed);
                 }
 
-                // Find the toggle with the maximum threshold
-                if let Some(toggle) = threshold_toggles.iter().find(|t| t.threshold == max_crossed_threshold) {
-                    // Check endswith_range if specified
-                    let should_trigger = if let Some((start, end)) = toggle.endswith_range {
-                        if last_digit < start || last_digit > end {
-                            println!("Toggle skipped: {} sats threshold ends with {}, not in range {}-{}", max_crossed_threshold, last_digit, start, end);
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        true
-                    };
+                if let Some(toggle) = threshold_toggles.iter().find(|t| t.threshold == max_crossed) {
+                    let should_trigger = toggle.endswith_range
+                        .map_or(true, |(start, end)| {
+                            let in_range = last_digit >= start && last_digit <= end;
+                            if !in_range {
+                                println!("Toggle skipped: {} sats threshold ends with {}, not in range {}-{}", max_crossed, last_digit, start, end);
+                            }
+                            in_range
+                        });
 
                     if should_trigger {
                         if let Err(e) = trigger_single_toggle(config, toggle).await {
-                            eprintln!("Failed to trigger toggle at {} sats: {:#}", max_crossed_threshold, e);
+                            eprintln!("Failed to trigger toggle at {} sats: {:#}", max_crossed, e);
                         } else {
                             triggered_effects.push(format_toggle_description(toggle));
                         }
                     }
                 }
-            }
-        }
-    }
-
-    // Second pass: if no threshold toggles were triggered, process default toggles
-    if !any_triggered {
-        for toggle in toggles.iter().filter(|t| t.is_default) {
-            // Check endswith_range if specified
-            if let Some((start, end)) = toggle.endswith_range {
-                if last_digit < start || last_digit > end {
-                    println!("Default toggle skipped: {} sats ends with {}, not in range {}-{}", sats, last_digit, start, end);
-                    continue;
-                }
-            }
-
-            println!("Default toggle triggered for {} sats - {} output", sats, toggle.output);
-
-            if let Err(e) = trigger_single_toggle(config, toggle).await {
-                eprintln!("Failed to trigger default toggle: {:#}", e);
+                true
             } else {
-                triggered_effects.push(format_toggle_description(toggle));
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // Trigger default toggles if no threshold was triggered
+    if !threshold_triggered {
+        for toggle in toggles.iter().filter(|t| t.is_default) {
+            let should_trigger = toggle.endswith_range
+                .map_or(true, |(start, end)| {
+                    let in_range = last_digit >= start && last_digit <= end;
+                    if !in_range {
+                        println!("Default toggle skipped: {} sats ends with {}, not in range {}-{}", sats, last_digit, start, end);
+                    }
+                    in_range
+                });
+
+            if should_trigger {
+                println!("Default toggle triggered for {} sats - {} output", sats, toggle.output);
+                if let Err(e) = trigger_single_toggle(config, toggle).await {
+                    eprintln!("Failed to trigger default toggle: {:#}", e);
+                } else {
+                    triggered_effects.push(format_toggle_description(toggle));
+                }
             }
         }
     }
 
     Ok(triggered_effects)
-}
-
-fn format_toggle_description(toggle: &config::Toggle) -> String {
-    match toggle.output.to_lowercase().as_str() {
-        "osc" => {
-            if let Some(osc) = &toggle.osc {
-                use crate::config::OscArgValue;
-                let value_str = match &osc.arg_value {
-                    OscArgValue::String(s) => format!("\"{}\"", s),
-                    OscArgValue::Int(i) => i.to_string(),
-                    OscArgValue::Float(f) => f.to_string(),
-                };
-                format!("OSC {}: {}", osc.path, value_str)
-            } else {
-                "OSC".to_string()
-            }
-        },
-        "artnet" => {
-            if let Some(artnet) = &toggle.artnet {
-                format!("Art-Net ch{}: {}", artnet.channel, artnet.value)
-            } else {
-                "Art-Net".to_string()
-            }
-        },
-        "sacn" => {
-            if let Some(sacn) = &toggle.sacn {
-                format!("sACN ch{}: {}", sacn.channel, sacn.value)
-            } else {
-                "sACN".to_string()
-            }
-        },
-        "wled" => {
-            if let Some(wled) = &toggle.wled {
-                format!("WLED: {}", wled.preset)
-            } else {
-                "WLED".to_string()
-            }
-        },
-        _ => toggle.output.clone()
-    }
-}
-
-async fn trigger_single_toggle(config: &config::Config, toggle: &config::Toggle) -> Result<()> {
-    match toggle.output.to_lowercase().as_str() {
-        "osc" => {
-            let Some(osc_cfg) = &config.osc else {
-                eprintln!("OSC toggle configured but OSC is not configured");
-                return Ok(());
-            };
-            let osc = osc::Osc::new(&osc_cfg.address)?;
-            osc.trigger_toggle(toggle)?;
-        },
-        "artnet" => {
-            let Some(artnet_cfg) = &config.artnet else {
-                eprintln!("Art-Net toggle configured but Art-Net is not configured");
-                return Ok(());
-            };
-            artnet::ArtNet::trigger_toggle(
-                toggle,
-                artnet_cfg.universe.unwrap_or(0),
-                artnet_cfg.broadcast_address.clone(),
-                artnet_cfg.local_address.clone()
-            )?;
-        },
-        "sacn" => {
-            let Some(sacn_cfg) = &config.sacn else {
-                eprintln!("sACN toggle configured but sACN is not configured");
-                return Ok(());
-            };
-            sacn::Sacn::trigger_toggle(
-                toggle,
-                sacn_cfg.universe.unwrap_or(1),
-                sacn_cfg.broadcast_address.clone()
-            )?;
-        },
-        "wled" => {
-            let Some(wled_cfg) = &config.wled else {
-                eprintln!("WLED toggle configured but WLED is not configured");
-                return Ok(());
-            };
-            wled::WLed::trigger_toggle(toggle, &wled_cfg.host).await?;
-        },
-        _ => {
-            eprintln!("Unknown toggle output type: {}", toggle.output);
-        }
-    }
-
-    Ok(())
-}
-
-// Generic listener initialization that handles common patterns
-async fn initialize_listener(
-    component_name: &str,
-    tx: &tokio::sync::mpsc::Sender<GuiMessage>
-) {
-    let _ = tx.send(GuiMessage::UpdateStatus(component_name.to_string(), ComponentStatus::Running)).await;
-}
-
-// Helper to sync trigger state after loading historical data
-async fn sync_threshold_triggers(
-    config: &config::Config,
-    tracker: &Arc<Mutex<sat_tracker::SatTracker>>
-) {
-    if let Some(toggles) = &config.toggles {
-        let thresholds: Vec<i64> = toggles.iter()
-            .filter(|t| !t.is_default && t.use_total && t.threshold > 0)
-            .map(|t| t.threshold)
-            .collect();
-
-        if !thresholds.is_empty() {
-            let max_threshold = *thresholds.iter().max().unwrap();
-            let mut tracker_guard = tracker.lock().await;
-            tracker_guard.sync_trigger_state(max_threshold);
-        }
-    }
 }
 
 async fn trigger_effects(
@@ -304,20 +201,15 @@ async fn trigger_effects(
     tracker: Option<Arc<Mutex<sat_tracker::SatTracker>>>
 ) -> Result<Vec<String>> {
     println!("Triggering effects for {} sats", sats);
-
-    // Trigger toggles and collect what was triggered
-    let triggered = match trigger_toggles(&config, sats, tracker.clone()).await {
-        Ok(effects) => effects,
-        Err(e) => {
-            eprintln!("Failed to trigger toggles: {:#}", e);
-            Vec::new()
-        }
-    };
-
-    Ok(triggered)
+    trigger_toggles(&config, sats, tracker).await
+        .inspect_err(|e| eprintln!("Failed to trigger toggles: {:#}", e))
+        .or(Ok(Vec::new()))
 }
 
-// Shared logic for processing boosts
+// ============================================================================
+// Boost Processing
+// ============================================================================
+
 async fn process_boost(
     source: &str,
     sats: i64,
@@ -326,63 +218,45 @@ async fn process_boost(
     config: &config::Config,
     trigger_effects_flag: bool
 ) {
-    // Add to tracker and get new total
-    let total = {
-        let mut tracker_guard = tracker.lock().await;
-        tracker_guard.add(source, sats)
-    };
+    let total = tracker.lock().await.add(source, sats);
     println!("{} received: {} sats, total now: {} sats", source, sats, total);
 
-    // Update GUI with new total
     let _ = tx.send(GuiMessage::UpdateSatTotal(total)).await;
 
-    // Trigger effects if requested
     let effects = if trigger_effects_flag {
-        match trigger_effects(config.clone(), sats, Some(tracker.clone())).await {
-            Ok(effects) => effects,
-            Err(e) => {
-                eprintln!("Unable to trigger effects: {:#}", e);
-                Vec::new()
-            }
-        }
+        trigger_effects(config.clone(), sats, Some(tracker.clone())).await.unwrap_or_default()
     } else {
         Vec::new()
     };
 
-    // Send boost received message to GUI with effects
     let _ = tx.send(GuiMessage::BoostReceived(source.to_string(), sats, effects)).await;
 }
 
-// Helper to handle connection errors
-async fn handle_connection_error(
-    component: &str,
-    error: anyhow::Error,
-    tx: &tokio::sync::mpsc::Sender<GuiMessage>
-) {
-    let error_msg = format!("Connection error: {:#}", error);
-    eprintln!("Error connecting to {}: {}", component, error_msg);
-    let _ = tx.send(GuiMessage::UpdateStatus(
-        component.to_string(),
-        ComponentStatus::Error(error_msg)
-    )).await;
+async fn sync_threshold_triggers(config: &config::Config, tracker: &Arc<Mutex<sat_tracker::SatTracker>>) {
+    if let Some(toggles) = &config.toggles {
+        let thresholds: Vec<i64> = toggles.iter()
+            .filter(|t| !t.is_default && t.use_total && t.threshold > 0)
+            .map(|t| t.threshold)
+            .collect();
+
+        if let Some(&max_threshold) = thresholds.iter().max() {
+            tracker.lock().await.sync_trigger_state(max_threshold);
+        }
+    }
 }
 
-// Helper to parse load_since timestamp
-fn parse_load_since(load_since_str: Option<&String>, default: Timestamp) -> Timestamp {
-    load_since_str
-        .and_then(|s| {
-            match parse_timestamp(s) {
-                Ok(ts) => {
-                    println!("Loading since: {}", s);
-                    Some(ts)
-                },
-                Err(e) => {
-                    eprintln!("Failed to parse load_since timestamp '{}': {:#}", s, e);
-                    None
-                }
-            }
-        })
-        .unwrap_or(default)
+// ============================================================================
+// Listeners
+// ============================================================================
+
+async fn initialize_listener(component_name: &str, tx: &tokio::sync::mpsc::Sender<GuiMessage>) {
+    let _ = tx.send(GuiMessage::UpdateStatus(component_name.to_string(), ComponentStatus::Running)).await;
+}
+
+async fn handle_connection_error(component: &str, error: anyhow::Error, tx: &tokio::sync::mpsc::Sender<GuiMessage>) {
+    let error_msg = format!("Connection error: {:#}", error);
+    eprintln!("Error connecting to {}: {}", component, error_msg);
+    let _ = tx.send(GuiMessage::UpdateStatus(component.to_string(), ComponentStatus::Error(error_msg))).await;
 }
 
 async fn listen_for_zaps(
@@ -396,10 +270,7 @@ async fn listen_for_zaps(
 
     let zap = match zaps::Zaps::new(&cfg.relay_addrs, &cfg.naddr).await {
         Ok(z) => z,
-        Err(e) => {
-            handle_connection_error("Zaps", e, &tx).await;
-            return;
-        }
+        Err(e) => return handle_connection_error("Zaps", e, &tx).await,
     };
 
     let load_since = Some(parse_load_since(cfg.load_since.as_ref(), Timestamp::now()));
@@ -407,34 +278,21 @@ async fn listen_for_zaps(
 
     tokio::select! {
         result = zap.subscribe_zaps(load_since, |zap: zaps::Zap| {
-            let config = config.clone();
-            let tx = tx.clone();
-            let tracker = tracker.clone();
-
+            let (config, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
             async move {
                 println!("Zap: {:#?}", zap);
-                let sats = zap.value_msat_total / 1000;
-                process_boost("Zaps", sats, &tx, &tracker, &config, true).await;
+                process_boost("Zaps", zap.value_msat_total / 1000, &tx, &tracker, &config, true).await;
             }
         }) => {
-            match result {
-                Ok(_) => {},
-                Err(e) => {
-                    let error_msg = format!("Event error: {:#}", e);
-                    eprintln!("Error handling zap events: {}", error_msg);
-                    let _ = tx.send(GuiMessage::UpdateStatus(
-                        "Zaps".to_string(),
-                        ComponentStatus::Error(error_msg)
-                    )).await;
-                }
+            if let Err(e) = result {
+                let error_msg = format!("Event error: {:#}", e);
+                eprintln!("Error handling zap events: {}", error_msg);
+                let _ = tx.send(GuiMessage::UpdateStatus("Zaps".to_string(), ComponentStatus::Error(error_msg))).await;
             }
         }
         _ = cancel_token.cancelled() => {
             println!("Zaps listener cancelled");
-            let _ = tx.send(GuiMessage::UpdateStatus(
-                "Zaps".to_string(),
-                ComponentStatus::Disabled
-            )).await;
+            let _ = tx.send(GuiMessage::UpdateStatus("Zaps".to_string(), ComponentStatus::Disabled)).await;
         }
     }
 }
@@ -450,14 +308,10 @@ async fn listen_for_boostboard(
 
     if cfg.relay_addrs.is_empty() {
         eprintln!("Error: No relay addresses specified for boostboard");
-        let _ = tx.send(GuiMessage::UpdateStatus(
-            "Boostboard".to_string(),
-            ComponentStatus::Error("No relay addresses specified".to_string())
-        )).await;
+        let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Error("No relay addresses specified".to_string()))).await;
         return;
     }
 
-    // Build filters
     let filters = boostboard::BoostFilters {
         podcasts: cfg.filters.podcasts.clone(),
         episode_guids: cfg.filters.episode_guids.clone(),
@@ -468,10 +322,7 @@ async fn listen_for_boostboard(
 
     let board = match boostboard::BoostBoard::new(&cfg.relay_addrs, &cfg.pubkey, filters.clone()).await {
         Ok(b) => b,
-        Err(e) => {
-            handle_connection_error("Boostboard", e, &tx).await;
-            return;
-        }
+        Err(e) => return handle_connection_error("Boostboard", e, &tx).await,
     };
 
     let load_since = Some(parse_load_since(cfg.filters.load_since.as_ref(), Timestamp::now()));
@@ -479,25 +330,15 @@ async fn listen_for_boostboard(
     // Load stored boosts
     println!("Loading stored boosts from API...");
     let stored_boosts = boostboard::StoredBoosts::new(filters);
-
-    let tx_stored = tx.clone();
-    let tracker_stored = tracker.clone();
-    let config_stored = config.clone();
-
-    let _ = stored_boosts.load(move |boost: boosts::Boostagram| {
-        let tx = tx_stored.clone();
-        let tracker = tracker_stored.clone();
-        let config = config_stored.clone();
-
+    let _ = stored_boosts.load(|boost: boosts::Boostagram| {
+        let (tx, tracker, config) = (tx.clone(), tracker.clone(), config.clone());
         async move {
             if boost.action == "boost" {
-                let sats = boost.sats;
-                process_boost("Boostboard", sats, &tx, &tracker, &config, false).await;
+                process_boost("Boostboard", boost.sats, &tx, &tracker, &config, false).await;
             }
         }
     }).await;
 
-    // Sync trigger state after loading historical boosts
     sync_threshold_triggers(&config, &tracker).await;
 
     let subscription_id = match board.subscribe(load_since).await {
@@ -505,55 +346,35 @@ async fn listen_for_boostboard(
         Err(e) => {
             let error_msg = format!("Subscription error: {:#}", e);
             eprintln!("Error subscribing to board: {}", error_msg);
-            let _ = tx.send(GuiMessage::UpdateStatus(
-                "Boostboard".to_string(),
-                ComponentStatus::Error(error_msg)
-            )).await;
+            let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Error(error_msg))).await;
             return;
         }
     };
 
     println!("Waiting for Boostboard boosts...");
     let subscription_start_time = Timestamp::now();
-
-    let config_clone = config.clone();
     let tx_clone = tx.clone();
-    let tracker_clone = tracker.clone();
 
     tokio::select! {
         result = board.handle_boosts(subscription_id, move |boost: boosts::Boostagram, event_ts: Timestamp| {
-            let config = config_clone.clone();
-            let tx = tx_clone.clone();
-            let tracker = tracker_clone.clone();
-            let subscription_start = subscription_start_time;
-
+            let (config, tx, tracker) = (config.clone(), tx_clone.clone(), tracker.clone());
             async move {
                 if boost.action == "boost" {
                     println!("Boost: {:#?}", boost);
-                    let sats = boost.sats;
-                    let trigger = event_ts >= subscription_start;
-                    process_boost("Boostboard", sats, &tx, &tracker, &config, trigger).await;
+                    let trigger = event_ts >= subscription_start_time;
+                    process_boost("Boostboard", boost.sats, &tx, &tracker, &config, trigger).await;
                 }
             }
         }) => {
-            match result {
-                Ok(_) => {},
-                Err(e) => {
-                    let error_msg = format!("Event error: {:#}", e);
-                    eprintln!("Error handling boostboard events: {}", error_msg);
-                    let _ = tx.send(GuiMessage::UpdateStatus(
-                        "Boostboard".to_string(),
-                        ComponentStatus::Error(error_msg)
-                    )).await;
-                }
+            if let Err(e) = result {
+                let error_msg = format!("Event error: {:#}", e);
+                eprintln!("Error handling boostboard events: {}", error_msg);
+                let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Error(error_msg))).await;
             }
         }
         _ = cancel_token.cancelled() => {
             println!("Boostboard listener cancelled");
-            let _ = tx.send(GuiMessage::UpdateStatus(
-                "Boostboard".to_string(),
-                ComponentStatus::Disabled
-            )).await;
+            let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Disabled)).await;
         }
     }
 }
@@ -567,7 +388,6 @@ async fn listen_for_nwc(
     let cfg = config.nwc.clone().unwrap();
     initialize_listener("NWC", &tx).await;
 
-    // Build filters
     let filters = boostboard::BoostFilters {
         podcasts: cfg.filters.podcasts.clone(),
         episode_guids: cfg.filters.episode_guids.clone(),
@@ -578,86 +398,100 @@ async fn listen_for_nwc(
 
     let nwc = match nwc::NWC::new(&cfg.uri, filters).await {
         Ok(n) => n,
-        Err(e) => {
-            handle_connection_error("NWC", e, &tx).await;
-            return;
-        }
+        Err(e) => return handle_connection_error("NWC", e, &tx).await,
     };
 
     let load_since = parse_load_since(cfg.filters.load_since.as_ref(), Timestamp::now());
 
-    // Load stored boosts
     println!("Loading previous boosts from NWC...");
-    let tx_stored = tx.clone();
-    let tracker_stored = tracker.clone();
-    let config_stored = config.clone();
-
-    let latest_boost_timestamp = match nwc.load_previous_boosts(Some(load_since), move |boost: boosts::Boostagram| {
-        let tx = tx_stored.clone();
-        let tracker = tracker_stored.clone();
-        let config = config_stored.clone();
-
+    let latest_boost_timestamp = nwc.load_previous_boosts(Some(load_since), |boost: boosts::Boostagram| {
+        let (tx, tracker, config) = (tx.clone(), tracker.clone(), config.clone());
         async move {
-            let sats = boost.sats;
-            process_boost("NWC", sats, &tx, &tracker, &config, false).await;
+            process_boost("NWC", boost.sats, &tx, &tracker, &config, false).await;
         }
-    }).await {
-        Ok(ts) => ts,
-        Err(e) => {
-            eprintln!("Error loading previous boosts from NWC: {:#}", e);
-            let _ = tx.send(GuiMessage::UpdateStatus(
-                "NWC".to_string(),
-                ComponentStatus::Error(format!("Failed to load previous boosts: {:#}", e))
-            )).await;
-            None
-        }
-    };
+    }).await.unwrap_or(None);
 
-    // Sync trigger state after loading historical boosts
     sync_threshold_triggers(&config, &tracker).await;
 
-    // Use the latest boost timestamp or load_since as the starting point for subscription
-    let subscription_start = latest_boost_timestamp
-        .map(|ts| ts + 1) // Start from after the last loaded boost to avoid duplicates
-        .unwrap_or(load_since);
-
+    let subscription_start = latest_boost_timestamp.map(|ts| ts + 1).unwrap_or(load_since);
     println!("Waiting for NWC boosts...");
 
     tokio::select! {
         result = nwc.subscribe_boosts(subscription_start, |boost: boosts::Boostagram| {
-            let config = config.clone();
-            let tx = tx.clone();
-            let tracker = tracker.clone();
-
+            let (config, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
             async move {
                 if boost.action == "boost" {
                     println!("NWC Boost: {:#?}", boost);
-                    let sats = boost.sats;
-                    process_boost("NWC", sats, &tx, &tracker, &config, true).await;
+                    process_boost("NWC", boost.sats, &tx, &tracker, &config, true).await;
                 }
             }
         }) => {
-            match result {
-                Ok(_) => {},
-                Err(e) => {
-                    let error_msg = format!("Event error: {:#}", e);
-                    eprintln!("Error handling NWC events: {}", error_msg);
-                    let _ = tx.send(GuiMessage::UpdateStatus(
-                        "NWC".to_string(),
-                        ComponentStatus::Error(error_msg)
-                    )).await;
-                }
+            if let Err(e) = result {
+                let error_msg = format!("Event error: {:#}", e);
+                eprintln!("Error handling NWC events: {}", error_msg);
+                let _ = tx.send(GuiMessage::UpdateStatus("NWC".to_string(), ComponentStatus::Error(error_msg))).await;
             }
         }
         _ = cancel_token.cancelled() => {
             println!("NWC listener cancelled");
-            let _ = tx.send(GuiMessage::UpdateStatus(
-                "NWC".to_string(),
-                ComponentStatus::Disabled
-            )).await;
+            let _ = tx.send(GuiMessage::UpdateStatus("NWC".to_string(), ComponentStatus::Disabled)).await;
         }
     }
 }
+
+// ============================================================================
+// Listener Management
+// ============================================================================
+
+async fn start_listener(
+    name: &str,
+    handles: &Arc<Mutex<HashMap<String, (JoinHandle<()>, CancellationToken)>>>,
+    config: &config::Config,
+    tx: &tokio::sync::mpsc::Sender<GuiMessage>,
+    tracker: &Arc<Mutex<sat_tracker::SatTracker>>
+) {
+    stop_listener(name, handles).await;
+
+    let cancel_token = CancellationToken::new();
+    let cancel_clone = cancel_token.clone();
+
+    let handle = match name {
+        "Zaps" if config.zaps.is_some() => {
+            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_zaps(cfg, tx, tracker, cancel_clone).await })
+        },
+        "Boostboard" if config.boostboard.is_some() => {
+            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_boostboard(cfg, tx, tracker, cancel_clone).await })
+        },
+        "NWC" if config.nwc.is_some() => {
+            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_nwc(cfg, tx, tracker, cancel_clone).await })
+        },
+        _ => {
+            eprintln!("Cannot start {}: not configured or unknown", name);
+            return;
+        }
+    };
+
+    handles.lock().await.insert(name.to_string(), (handle, cancel_token));
+}
+
+async fn stop_listener(
+    name: &str,
+    handles: &Arc<Mutex<HashMap<String, (JoinHandle<()>, CancellationToken)>>>
+) {
+    if let Some((handle, cancel_token)) = handles.lock().await.remove(name) {
+        println!("Cancelling {} listener...", name);
+        cancel_token.cancel();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+        println!("{} listener stopped", name);
+    }
+}
+
+// ============================================================================
+// Main
+// ============================================================================
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BlinkyBoosts...");
@@ -668,138 +502,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sat_tracker = Arc::new(Mutex::new(sat_tracker::SatTracker::new()));
 
     // Setup effects
-    let config_clone = config.clone();
-    let tx_clone = tx.clone();
-    rt.spawn(async move {
-        if let Err(e) = setup_effects(config_clone).await {
-            eprintln!("Error setting up effects: {:#}", e);
-            let _ = tx_clone.send(GuiMessage::UpdateStatus(
-                "Effects".to_string(),
-                ComponentStatus::Error(format!("{:#}", e))
-            )).await;
+    rt.spawn({
+        let config = config.clone();
+        let tx = tx.clone();
+        async move {
+            if let Err(e) = setup_effects(config).await {
+                eprintln!("Error setting up effects: {:#}", e);
+                let _ = tx.send(GuiMessage::UpdateStatus("Effects".to_string(), ComponentStatus::Error(format!("{:#}", e)))).await;
+            }
         }
     });
 
-    // Track listener tasks and cancellation tokens
+    // Track listener tasks
     let listener_handles: Arc<Mutex<HashMap<String, (JoinHandle<()>, CancellationToken)>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
     // Start initial listeners
-    let handles_clone = listener_handles.clone();
-    let config_clone = config.clone();
-    let tx_clone = tx.clone();
-    let tracker_clone = sat_tracker.clone();
-    rt.spawn(async move {
-        if config_clone.zaps.is_some() {
-            start_listener("Zaps", &handles_clone, &config_clone, &tx_clone, &tracker_clone).await;
-        }
-        if config_clone.boostboard.is_some() {
-            start_listener("Boostboard", &handles_clone, &config_clone, &tx_clone, &tracker_clone).await;
-        }
-        if config_clone.nwc.is_some() {
-            start_listener("NWC", &handles_clone, &config_clone, &tx_clone, &tracker_clone).await;
+    rt.spawn({
+        let (handles, config, tx, tracker) = (listener_handles.clone(), config.clone(), tx.clone(), sat_tracker.clone());
+        async move {
+            if config.zaps.is_some() {
+                start_listener("Zaps", &handles, &config, &tx, &tracker).await;
+            }
+            if config.boostboard.is_some() {
+                start_listener("Boostboard", &handles, &config, &tx, &tracker).await;
+            }
+            if config.nwc.is_some() {
+                start_listener("NWC", &handles, &config, &tx, &tracker).await;
+            }
         }
     });
 
-    // Handle test triggers, start/stop commands, and forward messages to GUI
-    let config_for_tests = config.clone();
-    let tracker_for_tests = sat_tracker.clone();
-    let handles_for_control = listener_handles.clone();
+    // Message handler
     let (gui_tx, gui_rx) = tokio::sync::mpsc::channel::<GuiMessage>(100);
-
-    rt.spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                GuiMessage::TestTrigger(sats) => {
-                    println!("Test trigger received for {} sats", sats);
-                    process_boost("Test", sats, &gui_tx, &tracker_for_tests, &config_for_tests, true).await;
-                },
-                GuiMessage::StartListener(name) => {
-                    println!("Starting listener: {}", name);
-                    start_listener(&name, &handles_for_control, &config_for_tests, &gui_tx, &tracker_for_tests).await;
-                },
-                GuiMessage::StopListener(name) => {
-                    println!("Stopping listener: {}", name);
-                    stop_listener(&name, &handles_for_control).await;
-                },
-                other => {
-                    let _ = gui_tx.send(other).await;
+    rt.spawn({
+        let (config, tracker, handles) = (config.clone(), sat_tracker.clone(), listener_handles.clone());
+        async move {
+            while let Some(msg) = rx.recv().await {
+                match msg {
+                    GuiMessage::TestTrigger(sats) => {
+                        println!("Test trigger received for {} sats", sats);
+                        process_boost("Test", sats, &gui_tx, &tracker, &config, true).await;
+                    },
+                    GuiMessage::StartListener(name) => {
+                        println!("Starting listener: {}", name);
+                        start_listener(&name, &handles, &config, &gui_tx, &tracker).await;
+                    },
+                    GuiMessage::StopListener(name) => {
+                        println!("Stopping listener: {}", name);
+                        stop_listener(&name, &handles).await;
+                    },
+                    other => { let _ = gui_tx.send(other).await; }
                 }
             }
         }
     });
 
-    gui::run_gui(tx.clone(), gui_rx)?;
-
+    gui::run_gui(tx, gui_rx)?;
     Ok(())
-}
-
-async fn start_listener(
-    name: &str,
-    handles: &Arc<Mutex<HashMap<String, (JoinHandle<()>, CancellationToken)>>>,
-    config: &config::Config,
-    tx: &tokio::sync::mpsc::Sender<GuiMessage>,
-    tracker: &Arc<Mutex<sat_tracker::SatTracker>>
-) {
-    // Stop existing listener if running
-    stop_listener(name, handles).await;
-
-    let cancel_token = CancellationToken::new();
-    let cancel_clone = cancel_token.clone();
-
-    let handle = match name {
-        "Zaps" => {
-            if config.zaps.is_none() {
-                eprintln!("Cannot start Zaps: not configured");
-                return;
-            }
-            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move {
-                listen_for_zaps(cfg, tx, tracker, cancel_clone).await;
-            })
-        },
-        "Boostboard" => {
-            if config.boostboard.is_none() {
-                eprintln!("Cannot start Boostboard: not configured");
-                return;
-            }
-            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move {
-                listen_for_boostboard(cfg, tx, tracker, cancel_clone).await;
-            })
-        },
-        "NWC" => {
-            if config.nwc.is_none() {
-                eprintln!("Cannot start NWC: not configured");
-                return;
-            }
-            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move {
-                listen_for_nwc(cfg, tx, tracker, cancel_clone).await;
-            })
-        },
-        _ => {
-            eprintln!("Unknown listener: {}", name);
-            return;
-        }
-    };
-
-    let mut handles_guard = handles.lock().await;
-    handles_guard.insert(name.to_string(), (handle, cancel_token));
-}
-
-async fn stop_listener(
-    name: &str,
-    handles: &Arc<Mutex<HashMap<String, (JoinHandle<()>, CancellationToken)>>>
-) {
-    let mut handles_guard = handles.lock().await;
-    if let Some((handle, cancel_token)) = handles_guard.remove(name) {
-        println!("Cancelling {} listener...", name);
-        cancel_token.cancel();
-        drop(handles_guard); // Release lock before awaiting
-
-        // Wait for task to complete (with timeout)
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
-        println!("{} listener stopped", name);
-    }
 }
