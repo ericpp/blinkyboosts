@@ -15,6 +15,7 @@ pub struct Zap {
     pub sender_name:      Option<String>,
     pub message:          Option<String>,
     pub value_msat_total: i64,
+    pub is_old:           bool,
 }
 
 #[derive(Debug)]
@@ -63,6 +64,8 @@ impl Zaps {
     {
         let sub_id = self.subscribe(since).await
             .context("Failed to subscribe to zaps")?;
+
+        let now = Timestamp::now();
 
         // Handle subscription notifications with `handle_notifications` method
         self.client.handle_notifications(|notification| async {
@@ -113,6 +116,7 @@ impl Zaps {
                     sender_name: Some(pubkey),
                     message: Some(event.content),
                     value_msat_total,
+                    is_old: event.created_at < now
                 };
 
                 func(result).await;

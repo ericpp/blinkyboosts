@@ -273,7 +273,14 @@ async fn listen_for_zaps(
         Err(e) => return handle_connection_error("Zaps", e, &tx).await,
     };
 
-    let load_since = Some(parse_load_since(cfg.load_since.as_ref(), Timestamp::now()));
+    let load_since = match cfg.load_since {
+        Some(load_since_str) => match parse_timestamp(&load_since_str) {
+            Ok(ts) => Some(ts),
+            Err(_) => None,
+        },
+        None => None,
+    };
+
     println!("Waiting for Zaps...");
 
     tokio::select! {
@@ -281,7 +288,7 @@ async fn listen_for_zaps(
             let (config, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
             async move {
                 println!("Zap: {:#?}", zap);
-                process_boost("Zaps", zap.value_msat_total / 1000, &tx, &tracker, &config, true).await;
+                process_boost("Zaps", zap.value_msat_total / 1000, &tx, &tracker, &config, !zap.is_old).await;
             }
         }) => {
             if let Err(e) = result {
