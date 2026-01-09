@@ -327,6 +327,8 @@ async fn listen_for_boostboard(
         after: cfg.filters.after.as_ref().and_then(|s| parse_timestamp(s).ok()),
     };
 
+    println!("Boostboard Filters: {:#?}", &filters);
+
     let board = match boostboard::BoostBoard::new(&cfg.relay_addrs, &cfg.pubkey, filters.clone()).await {
         Ok(b) => b,
         Err(e) => return handle_connection_error("Boostboard", e, &tx).await,
@@ -402,6 +404,8 @@ async fn listen_for_nwc(
         before: cfg.filters.before.as_ref().and_then(|s| parse_timestamp(s).ok()),
         after: cfg.filters.after.as_ref().and_then(|s| parse_timestamp(s).ok()),
     };
+
+    println!("NWC Filters: {:#?}", &filters);
 
     let nwc = match nwc::NWC::new(&cfg.uri, filters).await {
         Ok(n) => n,

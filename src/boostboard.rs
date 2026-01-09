@@ -7,10 +7,10 @@ use std::future::Future;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct BoostBoardEvent {
-    boostagram: Option<Boostagram>,
+    boostagram: Option<StoredBoostagram>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BoostFilters {
     pub podcasts: Option<Vec<String>>,
     pub episode_guids: Option<Vec<String>>,
@@ -85,7 +85,7 @@ impl BoostBoard {
         if let Some(before) = self.filters.before {
             filter = filter.until(before);
         }
-
+println!("Boostboard subscribe filters: {:#?}", filter);
         let Output { val: sub_id, .. } = self.client
             .subscribe(vec![filter], None)
             .await
@@ -109,12 +109,29 @@ impl BoostBoard {
             async move {
                 if let RelayPoolNotification::Event { subscription_id, event, .. } = notification {
                     if subscription_id != sub_id_check || !filters.matches_timestamp(event.created_at.as_u64() as i64) {
+                        println!("Timestamp not matched: {:#?}", event);
                         return Ok(false);
                     }
 
-                    if let Ok(BoostBoardEvent { boostagram: Some(boost) }) = serde_json::from_str(&event.content) {
-                        if filters.matches_boost(&boost) {
-                            func(boost, event.created_at).await;
+
+                    match serde_json::from_str::<StoredBoostInfo>(&event.content) {
+                        Ok(info) => {
+                            match info.to_boostagram() {
+                                Some(boost) => {
+                                    if filters.matches_boost(&boost) {
+                                        println!("Live boost: {:#?}", boost);
+                                        func(boost, event.created_at).await;
+                                    } else {
+                                        println!("Boost doesn't match filters: {:#?}", boost);
+                                    }
+                                }
+                                None => {
+                                    println!("Event has no boost info: {:#?}", info);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("Error parsing boost event: {:#?}", e);
                         }
                     }
                 }
@@ -188,6 +205,7 @@ impl StoredBoostInfo {
     }
 }
 
+
 pub struct StoredBoosts {
     filters: BoostFilters,
 }
@@ -238,6 +256,8 @@ impl StoredBoosts {
             if let Some(boost) = invoice.to_boostagram() {
                 if self.filters.matches_timestamp(invoice.creation_date) && self.filters.matches_boost(&boost) {
                     callback(boost).await;
+                } else {
+                    println!("Stored boost doesn't match filters: {:#?}", boost);
                 }
             }
         }
@@ -245,6 +265,7 @@ impl StoredBoosts {
 
     async fn fetch_page(&self, page: u32) -> Result<Vec<StoredBoostInfo>> {
         let url = self.build_url(page)?;
+        println!("StoredBoosts url: {:#?}", url);
         let response = reqwest::get(url).await
             .context("Failed to fetch boosts from API")?;
 
