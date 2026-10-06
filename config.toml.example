@@ -9,11 +9,22 @@ naddr = "naddr1qq9rzdesxvcnzwfjxgcsyg9e6qkt3lw7kxghq8kqvj8r0mgldta6yclqqc8uqcye5
 [nwc]
 uri = "nostr+walletconnect://abcdef..."
 
-[osc]
+[targets.osc]
+type = "osc"
 address = "127.0.0.1:7700"
 
+[targets.artnet]
+type = "artnet"
+broadcast_address = "255.255.255.255"
+universe = 0
 
-[wled]
+[targets.sacn]
+type = "sacn"
+broadcast_address = ""
+universe = 1
+
+[targets.wled]
+type = "wled"
 # host = "192.168.2.84"
 host = "192.168.2.114"
 boost_playlist = "BOOST"
@@ -21,283 +32,283 @@ brightness = 128
 setup = true
 force = false
 
-[[wled.segments]]
+[[targets.wled.segments]]
 name = "BOOSTAGRAM"
 start = 0
 stop = 104
 grouping = 1
 
-[[wled.segments]]
+[[targets.wled.segments]]
 name = "BOLT1"
 start = 104
 stop = 117
 grouping = 2
 
-[[wled.segments]]
+[[targets.wled.segments]]
 name = "BALL"
 start = 117
 stop = 155
 reverse = true
 grouping = 2
 
-[[wled.segments]]
+[[targets.wled.segments]]
 name = "BOLT2"
 start = 155
 stop = 168
 grouping = 2
 
-[[wled.segments]]
+[[targets.wled.segments]]
 name = "LIT"
 start = 168
 stop = 206
 grouping = 3
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "RGB 1"
 colors = [[255,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "RGB 2"
 colors = [[255,0,0],[0,0,0],[0,0,255],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "RGB 3"
 colors = [[255,0,0],[8,255,0],[0,0,255],[8,255,0],[255,170,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Freqpixels"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "RGB 4"
 colors = [[255,0,0],[8,255,0],[0,0,255],[8,255,0],[255,170,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Bowl After Bowl 1"
 colors = [[126,217,86],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq"]
 speed = 200
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Bowl After Bowl 2"
 colors = [[126,217,86],[0,0,0],[157,59,224],[0,0,0],[0,0,0]]
 effects = ["Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Bowl After Bowl 3"
 colors = [[126,217,86],[255,160,0],[157,59,224],[255,160,0],[208,40,37]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Bowl After Bowl Anim"
 colors = [[126,217,86],[255,160,0],[157,59,224],[255,160,0],[208,40,37]]
 effects = ["Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq", "Gravfreq"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Fun Fact Friday 1"
 colors = [[64,77,255],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Fun Fact Friday 2"
 colors = [[64,77,255],[0,0,0],[252,168,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Fun Fact Friday 3"
 colors = [[64,77,255],[252,168,0],[252,168,0],[252,168,0],[64,77,255]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Fun Fact Friday Anim"
 colors = [[64,77,255],[252,168,0],[252,168,0],[252,168,0],[64,77,255]]
 effects = ["Chase Random", "Chase Random", "Chase Random", "Chase Random", "Chase Random"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "MMO 1"
 colors = [[255,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "MMO 2"
 colors = [[255,0,0],[255,255,255],[255,255,255],[255,255,255],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "MMO 3"
 colors = [[255,0,0],[255,255,255],[255,255,255],[255,255,255],[255,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "MMO Anim"
 colors = [[255,0,0],[255,255,255],[255,255,255],[255,255,255],[255,0,0]]
 effects = ["Android", "Android", "Android", "Android", "Android"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "America 1"
 colors = [[255,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "America 2"
 colors = [[255,0,0],[0,0,0],[255,255,255],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "America 3"
 colors = [[255,0,0],[0,0,255],[255,255,255],[0,0,255],[0,0,255]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "America Anim"
 colors = [[255,0,0],[0,0,255],[255,255,255],[0,0,255],[0,0,255]]
 effects = ["Chase", "Chase", "Chase", "Chase", "Chase"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Nick the Rat 1"
 colors = [[84,77,220],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Nick the Rat 2"
 colors = [[84,77,220],[0,0,0],[157,157,155],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Nick the Rat 3"
 colors = [[84,77,220],[169,27,85],[157,157,155],[169,27,85],[169,27,85]]
 colors2 = [[0,0,0],[255, 200, 0],[0,0,0],[255, 200, 0],[0,0,0]]
 effects = ["Solid", "Breathe", "Solid", "Breathe", "Solid"]
 speed = 0
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Nick the Rat Anim"
 colors = [[84,77,220],[169,27,0],[157,157,0],[169,27,0],[169,27,85]]
 effects = ["Sweep Random", "Sweep Random", "Sweep Random", "Sweep Random", "Sweep Random"]
 speed = 240
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Planet Rage 1"
 colors = [[38,81,254],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Planet Rage 2"
 colors = [[38,81,254],[192,2,1],[94,193,0],[192,2,1],[192,2,1]]
 effects = ["Strobe", "Strobe", "Strobe", "Strobe", "Strobe"]
 speed = 128
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Planet Rage 3"
 colors = [[38,81,254],[192,2,1],[94,193,0],[192,2,1],[192,2,1]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Planet Rage Anim"
 colors = [[38,81,254],[192,2,0],[94,193,0],[192,20,0],[192,2,1]]
 effects = ["Ripple Peak", "Ripple Peak", "Ripple Peak", "Ripple Peak", "Ripple Peak"]
 speed = 128
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Homegrown Hits 1"
 colors = [[103,66,151],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Homegrown Hits 2"
 colors = [[103,66,151],[0,0,0],[4,148,175],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Homegrown Hits 3"
 colors = [[103,66,151],[103,66,151],[4,148,175],[103,66,151],[103,66,151]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Homegrown Hits Anim"
 colors = [[103,66,151],[103,66,151],[4,148,175],[103,66,151],[103,66,151]]
 effects = ["Stream", "Stream", "Stream", "Stream", "Stream"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "B4TS 1"
 colors = [[41,73,255],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "B4TS 2"
 colors = [[41,73,255],[0,0,0],[255,255,255],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "B4TS 3"
 colors = [[41,73,255],[77,221,225],[255,255,255],[77,221,225],[255,117,89]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "B4TS Anim"
 colors = [[41,73,255],[77,221,225],[255,255,255],[77,221,225],[255,117,89]]
 effects = ["Dancing Shadows", "Dancing Shadows", "Dancing Shadows", "Dancing Shadows", "Dancing Shadows"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Boostagram Ball 1"
 colors = [[255,38,71],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Boostagram Ball 2"
 colors = [[255,38,71],[0,0,0],[250,115,120],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Boostagram Ball 3"
 colors = [[255,38,71],[219,39,225],[250,115,120],[219,39,225],[254,181,46]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Boostagram Ball Anim"
 colors = [[255,38,71],[219,39,225],[250,115,120],[219,39,225],[254,181,46]]
 effects = ["Wavesins", "Wavesins", "Wavesins", "Wavesins", "Wavesins"]
 speed = 255
 
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Phantom Power 1"
 colors = [[222,47,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Phantom Power 2"
 colors = [[222,47,0],[0,0,0],[247,212,23],[0,0,0],[0,0,0]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Phantom Power 3"
 colors = [[222,47,0],[33,16,175],[247,212,23],[33,16,175],[33,16,175]]
 effects = ["Solid", "Solid", "Solid", "Solid", "Solid"]
 
-[[wled.presets]]
+[[targets.wled.presets]]
 name = "Phantom Power Anim"
 colors = [[222,47,0],[33,16,175],[247,212,23],[33,16,175],[33,16,175]]
 effects = ["Rainbow", "Rainbow", "Rainbow", "Rainbow", "Rainbow"]
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-0"
 presets = ["RGB 1", "RGB 2", "RGB 3", "RGB 4"]
 durations = [10, 10, 30, 10]
@@ -305,7 +316,7 @@ transitions = [7, 7, 0, 7]
 repeat = 1
 end = "RGB 4"
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-1"
 presets = ["Fun Fact Friday 1", "Fun Fact Friday 2", "Fun Fact Friday 3", "Fun Fact Friday Anim"]
 durations = [10, 10, 10, 50]
@@ -314,7 +325,7 @@ repeat = 1
 end = "Fun Fact Friday 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-2"
 presets = ["MMO 1", "MMO 2", "MMO 3", "MMO Anim"]
 durations = [10, 10, 10, 50]
@@ -323,7 +334,7 @@ repeat = 1
 end = "MMO 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-3"
 presets = ["Bowl After Bowl Anim", "Bowl After Bowl 3"]
 durations = [40, 50]
@@ -332,7 +343,7 @@ repeat = 1
 end = "Bowl After Bowl 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-4"
 presets = ["Nick the Rat 1", "Nick the Rat 2", "Nick the Rat 3", "Nick the Rat Anim"]
 durations = [10, 10, 10, 60]
@@ -341,7 +352,7 @@ repeat = 1
 end = "Nick the Rat 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-5"
 presets = ["Planet Rage Anim", "Planet Rage 2", "Planet Rage 3"]
 durations = [40, 20, 10]
@@ -350,7 +361,7 @@ repeat = 1
 end = "Planet Rage 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-6"
 presets = ["America 1", "America 2", "America 3", "America Anim"]
 durations = [10, 10, 10, 50]
@@ -359,7 +370,7 @@ repeat = 1
 end = "America 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-7"
 presets = ["B4TS 1", "B4TS 2", "B4TS 3", "B4TS Anim"]
 durations = [10, 10, 10, 50]
@@ -368,7 +379,7 @@ repeat = 1
 end = "B4TS 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-8"
 presets = ["Boostagram Ball 1", "Boostagram Ball 2", "Boostagram Ball 3", "Boostagram Ball Anim"]
 durations = [10, 10, 10, 50]
@@ -377,7 +388,7 @@ repeat = 1
 end = "Boostagram Ball 3"
 
 
-[[wled.playlists]]
+[[targets.wled.playlists]]
 name = "BOOST-9"
 presets = ["Phantom Power 1", "Phantom Power 2", "Phantom Power 3", "Phantom Power Anim"]
 durations = [10, 10, 10, 50]
@@ -387,97 +398,138 @@ end = "Phantom Power 3"
 
 
 # ==============================================================================
-# Toggles - Advanced threshold-based triggering for different outputs
+# Actions and toggles
 # ==============================================================================
-# Toggles allow you to trigger specific effects based on boost amounts
-# They are evaluated in order - first matching threshold wins
-# If no thresholds match, default toggles (is_default = true) are triggered
+# Define each command once under [actions.<name>], aimed at a target above.
+# A single table is one command. Repeating [[actions.<name>]] is a scene:
+# several commands, possibly to different targets, under one name.
+# Toggles only list those names. The same name can be used by many toggles.
 
-# OSC toggle examples - send commands to lighting consoles (GrandMA3, ETC, etc.)
-[[toggles]]
-threshold = 250_000  # Trigger when boost >= 250k sats
-output = "osc"
+[actions.seq1]
+target = "osc"
 path = "/gma3/cmd"
-arg_type = "string"  # Options: "string", "int", "float"
 arg_value = "Go+ Sequence 1"
 
-[[toggles]]
-threshold = 500_000
-output = "osc"
+[actions.seq2]
+target = "osc"
 path = "/gma3/cmd"
-arg_type = "string"
 arg_value = "Go+ Sequence 2"
 
-[[toggles]]
-threshold = 750_000
-output = "osc"
+[actions.seq3]
+target = "osc"
 path = "/gma3/cmd"
-arg_value = "Go+ Sequence 3"  # arg_type defaults to "string" if not specified
+arg_value = "Go+ Sequence 3"
 
-[[toggles]]
-threshold = 1_000_000
-output = "osc"
+[actions.eos_cue]
+target = "osc"
 path = "/eos/cue/fire"
-arg_type = "int"
-arg_value = "10"  # Fire cue 10
+arg_value = 10
 
-# Art-Net toggle examples - set specific DMX channels
-[[toggles]]
-threshold = 100_000
-output = "artnet"
-channel = 1  # DMX channel 1-512
-value = 255  # DMX value 0-255
-# universe = 2  # Optional - uses artnet config universe if not specified
+# Optional second OSC argument. Director Mini scene switches use it for the
+# transition: 0 = cut, 1 = fade. Omit it to send a single argument.
+[actions.scene2_fade]
+target = "osc"
+path = "/scene/switchByIndex"
+arg_value = 2
+arg_value2 = 1
 
-[[toggles]]
-threshold = 150_000
-output = "artnet"
+[actions.artnet_full]
+target = "artnet"
+channel = 1
+value = 255
+# universe = 2  # Optional - uses the target's universe if omitted
+
+[actions.artnet_dim]
+target = "artnet"
 channel = 5
 value = 128
-universe = 1  # Override default universe
+universe = 1  # Override the target's universe
 
-# sACN toggle examples - set specific DMX channels
-[[toggles]]
-threshold = 200_000
-output = "sacn"
+[actions.sacn_full]
+target = "sacn"
 channel = 10
 value = 255
-# universe = 3  # Optional - uses sacn config universe if not specified
 
-[[toggles]]
-threshold = 350_000
-output = "sacn"
+[actions.sacn_dim]
+target = "sacn"
 channel = 20
 value = 192
 universe = 2
 
-# WLED toggle examples - trigger specific presets/playlists
+[actions.boost3]
+target = "wled"
+preset = "BOOST-3"  # Must match a preset or playlist name on the WLED device
+
+[actions.bowl]
+target = "wled"
+preset = "Bowl After Bowl Anim"
+
+[actions.boost0]
+target = "wled"
+preset = "BOOST-0"
+
+# One name covering lights and a strip together
+[[actions.big_hit]]
+target = "artnet"
+channel = 1
+value = 255
+[[actions.big_hit]]
+target = "wled"
+preset = "BOOST-3"
+
+# Toggles list action names. They are evaluated by threshold; if none match,
+# default toggles (is_default = true) run.
+[[toggles]]
+threshold = 250_000
+actions = ["seq1"]
+
+[[toggles]]
+threshold = 500_000
+actions = ["seq2"]
+
+[[toggles]]
+threshold = 750_000
+actions = ["seq3"]
+
+[[toggles]]
+threshold = 1_000_000
+actions = ["eos_cue"]
+
+[[toggles]]
+threshold = 100_000
+actions = ["artnet_full"]
+
+[[toggles]]
+threshold = 150_000
+actions = ["artnet_dim"]
+
+[[toggles]]
+threshold = 200_000
+actions = ["sacn_full"]
+
+[[toggles]]
+threshold = 350_000
+actions = ["sacn_dim"]
+
 [[toggles]]
 threshold = 300_000
-output = "wled"
-preset = "BOOST-3"  # Must match a preset/playlist name in WLED config
+actions = ["boost3"]
 
 [[toggles]]
 threshold = 600_000
-output = "wled"
-preset = "Bowl After Bowl Anim"
+actions = ["bowl", "big_hit"]
 
-# Default toggles - triggered when no threshold matches
-# Perfect for handling small boosts or creating catch-all effects
 [[toggles]]
 is_default = true
-output = "wled"
-preset = "BOOST-0"  # Generic boost effect for any amount not matched above
+actions = ["boost0"]
 
-# You can have multiple default toggles for different outputs
+# A second default, and a revert that restores an earlier action after 30 seconds
 # [[toggles]]
 # is_default = true
-# output = "osc"
-# path = "/gma3/cmd"
-# arg_value = "Go+ Sequence 99"
-
+# actions = ["seq1"]
+#
 # [[toggles]]
-# is_default = true
-# output = "artnet"
-# channel = 1
-# value = 100
+# threshold = 250_000
+# revert_after = 30
+# actions = ["big_hit"]
+# revert = ["boost0"]

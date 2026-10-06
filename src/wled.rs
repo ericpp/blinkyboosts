@@ -299,19 +299,16 @@ impl WLed {
         set_state(&self.host, json!({"ps": preset_id})).await
     }
 
-    pub async fn trigger_toggle(toggle: &crate::config::Toggle, host: &str) -> Result<()> {
-        let wled_config = toggle.wled.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("WLED toggle missing 'wled' configuration"))?;
-
+    pub async fn trigger_toggle(cfg: &crate::config::WLed, preset_name: &str) -> Result<()> {
         let mut wled = WLed::new();
-        wled.load(host).await
+        wled.load(&cfg.host).await
             .context("Failed to load WLED for toggle")?;
 
-        if let Some(preset) = wled.get_preset(&wled_config.preset) {
+        if let Some(preset) = wled.get_preset(preset_name) {
             wled.run_preset(preset).await
-                .context(format!("Failed to run WLED preset: {}", wled_config.preset))
+                .context(format!("Failed to run WLED preset: {}", preset_name))
         } else {
-            Err(anyhow::anyhow!("WLED preset not found: {}", wled_config.preset))
+            Err(anyhow::anyhow!("WLED preset not found: {}", preset_name))
         }
     }
 }

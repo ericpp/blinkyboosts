@@ -78,12 +78,9 @@ impl Sacn {
         self.send_dmx(&data)
     }
 
-    pub fn trigger_toggle(toggle: &crate::config::Toggle, default_universe: u16, broadcast_address: String) -> Result<()> {
-        let sacn_config = toggle.sacn.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("sACN toggle missing 'sacn' configuration"))?;
-
-        let universe = sacn_config.universe.unwrap_or(default_universe);
-        let mut sacn = Sacn::new(broadcast_address, Some(universe))?;
-        sacn.trigger_channel(sacn_config.channel, sacn_config.value)
+    pub fn trigger_toggle(cfg: &crate::config::Sacn, channel: u16, value: u8, universe: Option<u16>) -> Result<()> {
+        let universe = universe.or(cfg.universe).unwrap_or(1);
+        let mut sacn = Sacn::new(cfg.broadcast_address.clone(), Some(universe))?;
+        sacn.trigger_channel(channel, value)
     }
 }

@@ -1,4 +1,4 @@
-use crate::config::{Config, BoostBoard, NWC, OSC, ArtNet, Sacn, WLed, Zaps, BoostFiltersConfig};
+use crate::config::{Config, BoostBoard, NWC, Target, Zaps, BoostFiltersConfig};
 use eframe::egui;
 use egui::{Color32, RichText, Ui, ViewportBuilder};
 use std::sync::{Arc, Mutex};
@@ -41,6 +41,18 @@ pub enum GuiMessage {
     UpdateSatTotal(i64),
     StartListener(String),
     StopListener(String),
+    ReloadConfig,
+    ConfigReloaded(Box<Config>),
+    ConfigReloadFailed(String),
+    RunAction(String),
+    /// `None` means the action was sent. `Some` is the error text.
+    ActionFinished(String, Option<String>),
+}
+
+enum ActionRun {
+    Running,
+    Ok(chrono::DateTime<Local>),
+    Failed(String),
 }
 
 pub struct BlinkyBoostsApp {
@@ -52,28 +64,17 @@ pub struct BlinkyBoostsApp {
     rx: Arc<Mutex<mpsc::Receiver<GuiMessage>>>,
     show_save_dialog: bool,
     save_error: Option<String>,
+    reload_note: Option<String>,
+    reload_error: Option<String>,
     expanded: std::collections::HashMap<String, bool>,
     test_amount: String,
     sat_total: i64,
+    action_status: std::collections::HashMap<String, ActionRun>,
 }
 
 impl BlinkyBoostsApp {
     pub fn new(config: Config, tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>) -> Self {
-        let mut statuses = std::collections::HashMap::new();
-        for (name, enabled) in [
-            ("NWC", config.nwc.is_some()),
-            ("Boostboard", config.boostboard.is_some()),
-            ("Zaps", config.zaps.is_some()),
-            ("WLED", config.wled.is_some()),
-            ("OSC", config.osc.is_some()),
-            ("Art-Net", config.artnet.is_some()),
-            ("sACN", config.sacn.is_some()),
-        ] {
-            statuses.insert(
-                name.to_string(),
-                if enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled }
-            );
-        }
+        let statuses = component_statuses(&config);
 
         Self {
             config: config.clone(),
@@ -84,9 +85,12 @@ impl BlinkyBoostsApp {
             rx: Arc::new(Mutex::new(rx)),
             show_save_dialog: false,
             save_error: None,
+            reload_note: None,
+            reload_error: None,
             expanded: std::collections::HashMap::new(),
             test_amount: "100".to_string(),
             sat_total: 0,
+            action_status: std::collections::HashMap::new(),
         }
     }
 
@@ -98,6 +102,7 @@ impl BlinkyBoostsApp {
                         self.config = self.modified_config.clone();
                         self.show_save_dialog = false;
                         self.save_error = None;
+                        let _ = self.tx.try_send(GuiMessage::ReloadConfig);
                     }
                     Err(e) => self.save_error = Some(format!("Write failed: {}", e)),
                 }
@@ -107,22 +112,48 @@ impl BlinkyBoostsApp {
     }
 
     fn process_messages(&mut self) {
-        if let Ok(mut rx) = self.rx.try_lock() {
+        let messages = {
+            let Ok(mut rx) = self.rx.try_lock() else { return };
+            let mut messages = Vec::new();
             while let Ok(msg) = rx.try_recv() {
-                match msg {
-                    GuiMessage::UpdateStatus(comp, status) => {
-                        self.statuses.insert(comp, status);
-                    }
-                    GuiMessage::BoostReceived(src, amt, fx) => {
-                        self.recent_boosts.push((src, amt, fx, Local::now()));
-                    }
-                    GuiMessage::TestTrigger(_) => {}
-                    GuiMessage::UpdateSatTotal(total) => {
-                        self.sat_total = total;
-                    }
-                    GuiMessage::StartListener(_) | GuiMessage::StopListener(_) => {
-                        // These are handled by main.rs, not by the GUI
-                    }
+                messages.push(msg);
+            }
+            messages
+        };
+        for msg in messages {
+            match msg {
+                GuiMessage::UpdateStatus(comp, status) => {
+                    self.statuses.insert(comp, status);
+                }
+                GuiMessage::BoostReceived(src, amt, fx) => {
+                    self.recent_boosts.push((src, amt, fx, Local::now()));
+                }
+                GuiMessage::TestTrigger(_) => {}
+                GuiMessage::UpdateSatTotal(total) => {
+                    self.sat_total = total;
+                }
+                GuiMessage::StartListener(_) | GuiMessage::StopListener(_) | GuiMessage::ReloadConfig | GuiMessage::RunAction(_) => {
+                    // These are handled by main.rs, not by the GUI
+                }
+                GuiMessage::ActionFinished(name, err) => {
+                    self.action_status.insert(
+                        name,
+                        match err {
+                            None => ActionRun::Ok(Local::now()),
+                            Some(msg) => ActionRun::Failed(msg),
+                        },
+                    );
+                }
+                GuiMessage::ConfigReloaded(cfg) => {
+                    self.adopt_config(*cfg);
+                    self.show_save_dialog = false;
+                    self.save_error = None;
+                    self.reload_error = None;
+                    self.reload_note = Some("Config reloaded".to_string());
+                }
+                GuiMessage::ConfigReloadFailed(msg) => {
+                    self.reload_error = Some(msg);
+                    self.reload_note = None;
                 }
             }
         }
@@ -162,45 +193,6 @@ impl BlinkyBoostsApp {
                     ));
                 }
             },
-            "WLED" => {
-                if enabled {
-                    cfg.wled = None;
-                } else {
-                    cfg.wled = Some(orig_cfg.wled.clone().unwrap_or_else(||
-                        WLed {
-                            host: String::new(), boost_playlist: "BOOST".into(), brightness: 128,
-                            segments: None, presets: None, playlists: None, setup: false, force: false,
-                        }
-                    ));
-                }
-            },
-            "OSC" => {
-                if enabled {
-                    cfg.osc = None;
-                } else {
-                    cfg.osc = Some(orig_cfg.osc.clone().unwrap_or_else(||
-                        OSC { address: String::new() }
-                    ));
-                }
-            },
-            "Art-Net" => {
-                if enabled {
-                    cfg.artnet = None;
-                } else {
-                    cfg.artnet = Some(orig_cfg.artnet.clone().unwrap_or_else(||
-                        ArtNet { broadcast_address: String::new(), local_address: None, universe: Some(0) }
-                    ));
-                }
-            },
-            "sACN" => {
-                if enabled {
-                    cfg.sacn = None;
-                } else {
-                    cfg.sacn = Some(orig_cfg.sacn.clone().unwrap_or_else(||
-                        Sacn { broadcast_address: String::new(), universe: Some(1) }
-                    ));
-                }
-            },
             _ => return,
         }
 
@@ -216,6 +208,30 @@ impl BlinkyBoostsApp {
             if enabled { ComponentStatus::Disabled } else { ComponentStatus::Enabled }
         );
         self.show_save_dialog = true;
+    }
+
+    /// Replace the displayed config. Keep a Running or Error status for anything still enabled,
+    /// so a listener that did not restart does not flip back to Enabled.
+    fn adopt_config(&mut self, config: Config) {
+        let fresh = component_statuses(&config);
+        for (name, status) in fresh {
+            let keep_live = matches!(
+                self.statuses.get(&name),
+                Some(ComponentStatus::Running | ComponentStatus::Error(_))
+            );
+            let still_enabled = status != ComponentStatus::Disabled;
+            if keep_live && still_enabled {
+                continue;
+            }
+            self.statuses.insert(name, status);
+        }
+        self.statuses.retain(|name, _| {
+            matches!(name.as_str(), "NWC" | "Boostboard" | "Zaps" | "Effects")
+                || config.targets.contains_key(name)
+        });
+        self.action_status.retain(|name, _| config.actions.contains_key(name));
+        self.config = config.clone();
+        self.modified_config = config;
     }
 
     fn render_component(&mut self, ui: &mut Ui, name: &str) {
@@ -320,95 +336,227 @@ impl BlinkyBoostsApp {
                     }
                 }
             }
-            "WLED" => {
-                if let Some(wled) = &mut self.modified_config.wled {
-                    ui.horizontal(|ui| {
-                        ui.label("Host:");
-                        if ui.text_edit_singleline(&mut wled.host).changed() {
-                            *changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Playlist:");
-                        if ui.text_edit_singleline(&mut wled.boost_playlist).changed() {
-                            *changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Brightness:");
-                        if ui.add(egui::Slider::new(&mut wled.brightness, 0..=255)).changed() {
-                            *changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Setup:");
-                        if ui.checkbox(&mut wled.setup, "").changed() {
-                            *changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Force:");
-                        if ui.checkbox(&mut wled.force, "").changed() {
-                            *changed = true;
-                        }
-                    });
-                }
-            }
-            "OSC" => {
-                if let Some(osc) = &mut self.modified_config.osc {
-                    ui.horizontal(|ui| {
-                        ui.label("Address:");
-                        if ui.text_edit_singleline(&mut osc.address).changed() {
-                            *changed = true;
-                        }
-                    });
-                }
-            }
-            "Art-Net" => {
-                if let Some(artnet) = &mut self.modified_config.artnet {
-                    ui.horizontal(|ui| {
-                        ui.label("Broadcast:");
-                        if ui.text_edit_singleline(&mut artnet.broadcast_address).changed() {
-                            *changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Local:");
-                        let mut local = artnet.local_address.clone().unwrap_or_default();
-                        if ui.text_edit_singleline(&mut local).changed() {
-                            artnet.local_address = if local.is_empty() { None } else { Some(local) };
-                            *changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Universe:");
-                        let mut s = artnet.universe.unwrap_or(0).to_string();
-                        if ui.text_edit_singleline(&mut s).changed() {
-                            if let Ok(n) = s.parse() {
-                                artnet.universe = Some(n);
-                                *changed = true;
-                            }
-                        }
-                    });
-                }
-            }
-            "sACN" => {
-                if let Some(sacn) = &mut self.modified_config.sacn {
-                    ui.horizontal(|ui| {
-                        ui.label("Universe:");
-                        let mut s = sacn.universe.unwrap_or(1).to_string();
-                        if ui.text_edit_singleline(&mut s).changed() {
-                            if let Ok(n) = s.parse() {
-                                sacn.universe = Some(n);
-                                *changed = true;
-                            }
-                        }
-                    });
-                }
-            }
             _ => {}
         }
     }
+
+    fn toggle_target(&mut self, name: &str) {
+        let Some(target) = self.modified_config.targets.get_mut(name) else { return };
+        target.enabled = !target.enabled;
+        let enabled = target.enabled;
+        self.statuses.insert(
+            name.to_string(),
+            if enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
+        );
+        self.show_save_dialog = true;
+    }
+
+    fn render_target(&mut self, ui: &mut Ui, name: &str) {
+        let (enabled, label) = match self.modified_config.targets.get(name) {
+            Some(target) => (target.enabled, target.kind.label()),
+            None => return,
+        };
+        let status = if enabled {
+            self.statuses.get(name).cloned().unwrap_or(ComponentStatus::Enabled)
+        } else {
+            ComponentStatus::Disabled
+        };
+
+        ui.horizontal(|ui| {
+            ui.set_height(20.0);
+            ui.label(format!("{} ({})", name, label));
+            ui.label(RichText::new(status.text()).color(status.color()));
+
+            let btn_text = if enabled { "Disable" } else { "Enable" };
+            if ui.add_sized([80.0, 20.0], egui::Button::new(btn_text)).clicked() {
+                self.toggle_target(name);
+            }
+
+            if ui.add_sized([30.0, 20.0], egui::Button::new("⚙")).clicked() {
+                let expanded = self.expanded.entry(name.to_string()).or_insert(false);
+                *expanded = !*expanded;
+            }
+        });
+
+        if *self.expanded.get(name).unwrap_or(&false) {
+            ui.indent(name, |ui| self.render_target_settings(ui, name));
+        }
+    }
+
+    fn render_target_settings(&mut self, ui: &mut Ui, name: &str) {
+        let changed = &mut self.show_save_dialog;
+        let Some(target) = self.modified_config.targets.get_mut(name) else { return };
+
+        match &mut target.kind {
+            Target::Osc { address } => {
+                ui.horizontal(|ui| {
+                    ui.label("Address:");
+                    if ui.text_edit_singleline(address).changed() {
+                        *changed = true;
+                    }
+                });
+            }
+            Target::Artnet(artnet) => {
+                ui.horizontal(|ui| {
+                    ui.label("Broadcast:");
+                    if ui.text_edit_singleline(&mut artnet.broadcast_address).changed() {
+                        *changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Local:");
+                    let mut local = artnet.local_address.clone().unwrap_or_default();
+                    if ui.text_edit_singleline(&mut local).changed() {
+                        artnet.local_address = if local.is_empty() { None } else { Some(local) };
+                        *changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Universe:");
+                    let mut s = artnet.universe.unwrap_or(0).to_string();
+                    if ui.text_edit_singleline(&mut s).changed() {
+                        if let Ok(n) = s.parse() {
+                            artnet.universe = Some(n);
+                            *changed = true;
+                        }
+                    }
+                });
+            }
+            Target::Sacn(sacn) => {
+                ui.horizontal(|ui| {
+                    ui.label("Universe:");
+                    let mut s = sacn.universe.unwrap_or(1).to_string();
+                    if ui.text_edit_singleline(&mut s).changed() {
+                        if let Ok(n) = s.parse() {
+                            sacn.universe = Some(n);
+                            *changed = true;
+                        }
+                    }
+                });
+            }
+            Target::Wled(wled) => {
+                ui.horizontal(|ui| {
+                    ui.label("Host:");
+                    if ui.text_edit_singleline(&mut wled.host).changed() {
+                        *changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Playlist:");
+                    if ui.text_edit_singleline(&mut wled.boost_playlist).changed() {
+                        *changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Brightness:");
+                    if ui.add(egui::Slider::new(&mut wled.brightness, 0..=255)).changed() {
+                        *changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Setup:");
+                    if ui.checkbox(&mut wled.setup, "").changed() {
+                        *changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Force:");
+                    if ui.checkbox(&mut wled.force, "").changed() {
+                        *changed = true;
+                    }
+                });
+            }
+        }
+    }
+
+    fn render_actions(&mut self, ui: &mut Ui) {
+        let rows: Vec<(String, Vec<(String, bool)>)> = self
+            .config
+            .actions
+            .iter()
+            .map(|(name, group)| {
+                let mut targets = Vec::new();
+                for action in group.as_slice() {
+                    if targets.iter().any(|(target, _)| target == &action.target) {
+                        continue;
+                    }
+                    let enabled = self
+                        .config
+                        .targets
+                        .get(&action.target)
+                        .is_some_and(|target| target.enabled);
+                    targets.push((action.target.clone(), enabled));
+                }
+                (name.clone(), targets)
+            })
+            .collect();
+
+        ui.add_space(20.0);
+        egui::CollapsingHeader::new(RichText::new("Actions").heading())
+            .default_open(true)
+            .show(ui, |ui| {
+                if rows.is_empty() {
+                    ui.label("No actions configured");
+                    return;
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        for (name, targets) in &rows {
+                            self.render_action_row(ui, name, targets);
+                        }
+                    });
+            });
+    }
+
+    fn render_action_row(&mut self, ui: &mut Ui, name: &str, targets: &[(String, bool)]) {
+        let running = matches!(self.action_status.get(name), Some(ActionRun::Running));
+
+        ui.horizontal(|ui| {
+            ui.set_height(20.0);
+            ui.label(name);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for (i, (target, enabled)) in targets.iter().enumerate() {
+                    if i > 0 {
+                        ui.label(", ");
+                    }
+                    let text = if *enabled {
+                        RichText::new(target)
+                    } else {
+                        RichText::new(target).color(Color32::GRAY)
+                    };
+                    ui.label(text);
+                }
+            });
+
+            if ui
+                .add_enabled(!running, egui::Button::new("Run").min_size(egui::vec2(80.0, 20.0)))
+                .clicked()
+                && self.tx.try_send(GuiMessage::RunAction(name.to_string())).is_ok()
+            {
+                self.action_status.insert(name.to_string(), ActionRun::Running);
+            }
+
+            match self.action_status.get(name) {
+                Some(ActionRun::Running) => {
+                    ui.label(RichText::new("Running...").color(Color32::LIGHT_BLUE));
+                }
+                Some(ActionRun::Ok(time)) => {
+                    ui.label(
+                        RichText::new(format!("OK {}", time.format("%H:%M:%S")))
+                            .color(Color32::LIGHT_GREEN),
+                    );
+                }
+                Some(ActionRun::Failed(err)) => {
+                    ui.label(RichText::new("Failed").color(Color32::RED))
+                        .on_hover_text(err);
+                }
+                None => {}
+            }
+        });
+    }
+
 }
 
 impl eframe::App for BlinkyBoostsApp {
@@ -417,7 +565,17 @@ impl eframe::App for BlinkyBoostsApp {
         ctx.request_repaint_after(Duration::from_millis(100));
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("BlinkyBoosts");
+            ui.horizontal(|ui| {
+                ui.heading("BlinkyBoosts");
+                if ui.button("Reload Config").clicked() {
+                    let _ = self.tx.try_send(GuiMessage::ReloadConfig);
+                }
+            });
+            if let Some(err) = &self.reload_error {
+                ui.colored_label(Color32::RED, format!("Reload failed: {}", err));
+            } else if let Some(note) = &self.reload_note {
+                ui.label(RichText::new(note).color(Color32::LIGHT_GREEN));
+            }
             ui.add_space(10.0);
 
             // Display sat total
@@ -436,8 +594,13 @@ impl eframe::App for BlinkyBoostsApp {
 
                 cols[1].heading("Outputs");
                 cols[1].separator();
-                for name in ["WLED", "OSC", "Art-Net", "sACN"] {
-                    self.render_component(&mut cols[1], name);
+                let names: Vec<String> = self.modified_config.targets.keys().cloned().collect();
+                if names.is_empty() {
+                    cols[1].label("No targets configured");
+                } else {
+                    for name in names {
+                        self.render_target(&mut cols[1], &name);
+                    }
                 }
             });
 
@@ -456,6 +619,8 @@ impl eframe::App for BlinkyBoostsApp {
                     }
                 }
             });
+
+            self.render_actions(ui);
 
             ui.add_space(20.0);
             ui.heading("Recent Boosts");
@@ -496,6 +661,27 @@ impl eframe::App for BlinkyBoostsApp {
     }
 }
 
+fn component_statuses(config: &Config) -> std::collections::HashMap<String, ComponentStatus> {
+    let mut statuses = std::collections::HashMap::new();
+    for (name, enabled) in [
+        ("NWC", config.nwc.is_some()),
+        ("Boostboard", config.boostboard.is_some()),
+        ("Zaps", config.zaps.is_some()),
+    ] {
+        statuses.insert(
+            name.to_string(),
+            if enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
+        );
+    }
+    for (name, target) in &config.targets {
+        statuses.insert(
+            name.clone(),
+            if target.enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
+        );
+    }
+    statuses
+}
+
 pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>)
     -> Result<(), Box<dyn std::error::Error>>
 {
@@ -507,10 +693,8 @@ pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>)
                 nwc: None,
                 boostboard: None,
                 zaps: None,
-                osc: None,
-                artnet: None,
-                sacn: None,
-                wled: None,
+                targets: std::collections::BTreeMap::new(),
+                actions: std::collections::BTreeMap::new(),
                 toggles: None,
             }
         }

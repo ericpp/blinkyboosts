@@ -72,12 +72,9 @@ impl ArtNet {
         self.send_dmx(&data)
     }
 
-    pub fn trigger_toggle(toggle: &crate::config::Toggle, default_universe: u16, broadcast_address: String, local_address: Option<String>) -> Result<()> {
-        let artnet_config = toggle.artnet.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Art-Net toggle missing 'artnet' configuration"))?;
-
-        let universe = artnet_config.universe.unwrap_or(default_universe);
-        let artnet = ArtNet::new(broadcast_address, local_address, Some(universe))?;
-        artnet.trigger_channel(artnet_config.channel, artnet_config.value)
+    pub fn trigger_toggle(cfg: &crate::config::ArtNet, channel: u16, value: u8, universe: Option<u16>) -> Result<()> {
+        let universe = universe.or(cfg.universe).unwrap_or(0);
+        let artnet = ArtNet::new(cfg.broadcast_address.clone(), cfg.local_address.clone(), Some(universe))?;
+        artnet.trigger_channel(channel, value)
     }
 }

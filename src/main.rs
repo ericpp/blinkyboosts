@@ -17,8 +17,17 @@ mod wled;
 mod zaps;
 mod gui;
 mod sat_tracker;
+mod revert;
+mod actions;
 
 use gui::{ComponentStatus, GuiMessage};
+
+/// The live config. A reload swaps the contents, and every boost reads the current value.
+type SharedConfig = Arc<std::sync::RwLock<config::Config>>;
+
+fn snapshot(config: &SharedConfig) -> config::Config {
+    config.read().unwrap().clone()
+}
 
 // ============================================================================
 // Utility Functions
@@ -41,21 +50,25 @@ fn parse_load_since(load_since_str: Option<&String>, default: Timestamp) -> Time
 // ============================================================================
 
 async fn setup_effects(config: config::Config) -> Result<()> {
-    let Some(cfg) = config.wled else { return Ok(()) };
-    if !cfg.setup { return Ok(()) };
+    for (name, target) in &config.targets {
+        let config::Target::Wled(cfg) = &target.kind else { continue };
+        if !target.enabled || !cfg.setup { continue };
 
-    let mut wled = wled::WLed::new();
-    wled.load(&cfg.host).await.context("Unable to load from WLED")?;
+        println!("Setting up WLED target '{}'", name);
+        let mut wled = wled::WLed::new();
+        wled.load(&cfg.host).await
+            .with_context(|| format!("Unable to load WLED target '{}'", name))?;
 
-    if let Some(presets) = &cfg.presets {
-        for (idx, preset) in presets.iter().enumerate() {
-            wled.set_preset(idx, &cfg, preset).await?;
+        if let Some(presets) = &cfg.presets {
+            for (idx, preset) in presets.iter().enumerate() {
+                wled.set_preset(idx, cfg, preset).await?;
+            }
         }
-    }
 
-    if let Some(playlists) = &cfg.playlists {
-        for (idx, playlist) in playlists.iter().enumerate() {
-            wled.set_playlist(idx, &cfg, playlist).await?;
+        if let Some(playlists) = &cfg.playlists {
+            for (idx, playlist) in playlists.iter().enumerate() {
+                wled.set_playlist(idx, cfg, playlist).await?;
+            }
         }
     }
 
@@ -63,50 +76,31 @@ async fn setup_effects(config: config::Config) -> Result<()> {
 }
 
 fn format_toggle_description(toggle: &config::Toggle) -> String {
-    match toggle.output.to_lowercase().as_str() {
-        "osc" => toggle.osc.as_ref().map_or("OSC".to_string(), |osc| {
-            use crate::config::OscArgValue;
-            let value_str = match &osc.arg_value {
-                OscArgValue::String(s) => format!("\"{}\"", s),
-                OscArgValue::Int(i) => i.to_string(),
-                OscArgValue::Float(f) => f.to_string(),
-            };
-            format!("OSC {}: {}", osc.path, value_str)
-        }),
-        "artnet" => toggle.artnet.as_ref()
-            .map_or("Art-Net".to_string(), |a| format!("Art-Net ch{}: {}", a.channel, a.value)),
-        "sacn" => toggle.sacn.as_ref()
-            .map_or("sACN".to_string(), |s| format!("sACN ch{}: {}", s.channel, s.value)),
-        "wled" => toggle.wled.as_ref()
-            .map_or("WLED".to_string(), |w| format!("WLED: {}", w.preset)),
-        _ => toggle.output.clone()
+    let mut desc = actions::describe(&toggle.actions);
+    if let Some(secs) = toggle.revert_after {
+        if !toggle.revert.is_empty() {
+            desc.push_str(&format!(" (reverts in {}s)", secs));
+        }
     }
+    desc
 }
 
 async fn trigger_single_toggle(config: &config::Config, toggle: &config::Toggle) -> Result<()> {
-    match toggle.output.to_lowercase().as_str() {
-        "osc" => {
-            let osc_cfg = config.osc.as_ref().context("OSC not configured")?;
-            osc::Osc::new(&osc_cfg.address)?.trigger_toggle(toggle)?;
-        },
-        "artnet" => {
-            let cfg = config.artnet.as_ref().context("Art-Net not configured")?;
-            artnet::ArtNet::trigger_toggle(
-                toggle, cfg.universe.unwrap_or(0),
-                cfg.broadcast_address.clone(), cfg.local_address.clone()
-            )?;
-        },
-        "sacn" => {
-            let cfg = config.sacn.as_ref().context("sACN not configured")?;
-            sacn::Sacn::trigger_toggle(toggle, cfg.universe.unwrap_or(1), cfg.broadcast_address.clone())?;
-        },
-        "wled" => {
-            let cfg = config.wled.as_ref().context("WLED not configured")?;
-            wled::WLed::trigger_toggle(toggle, &cfg.host).await?;
-        },
-        _ => eprintln!("Unknown toggle output type: {}", toggle.output),
+    actions::run(config, &toggle.actions).await
+}
+
+async fn fire_toggle(config: &config::Config, toggle: &config::Toggle, triggered_effects: &mut Vec<String>, err_context: &str) {
+    if let Err(e) = trigger_single_toggle(config, toggle).await {
+        eprintln!("{}: {:#}", err_context, e);
+    } else {
+        triggered_effects.push(format_toggle_description(toggle));
+        // A new look replaces the previous one, so drop any revert still waiting.
+        if toggle.revert_after.is_some() && !toggle.revert.is_empty() {
+            revert::schedule(config.clone(), toggle.clone()).await;
+        } else {
+            revert::cancel_pending().await;
+        }
     }
-    Ok(())
 }
 
 async fn trigger_toggles(
@@ -116,12 +110,12 @@ async fn trigger_toggles(
 ) -> Result<Vec<String>> {
     let Some(toggles) = &config.toggles else { return Ok(Vec::new()) };
 
-    let last_digit = (sats % 10).abs() as u8;
+    let last_two_digits = (sats % 100).abs() as u8;
     let mut triggered_effects = Vec::new();
 
     // Check threshold-based toggles
     let threshold_toggles: Vec<_> = toggles.iter()
-        .filter(|t| !t.is_default && t.use_total && t.threshold > 0)
+        .filter(|t| !t.is_default && t.threshold > 0)
         .collect();
 
     let threshold_triggered = if !threshold_toggles.is_empty() {
@@ -143,19 +137,15 @@ async fn trigger_toggles(
                 if let Some(toggle) = threshold_toggles.iter().find(|t| t.threshold == max_crossed) {
                     let should_trigger = toggle.endswith_range
                         .map_or(true, |(start, end)| {
-                            let in_range = last_digit >= start && last_digit <= end;
+                            let in_range = last_two_digits >= start && last_two_digits <= end;
                             if !in_range {
-                                println!("Toggle skipped: {} sats threshold ends with {}, not in range {}-{}", max_crossed, last_digit, start, end);
+                                println!("Toggle skipped: {} sats threshold ends with {}, not in range {}-{}", max_crossed, last_two_digits, start, end);
                             }
                             in_range
                         });
 
                     if should_trigger {
-                        if let Err(e) = trigger_single_toggle(config, toggle).await {
-                            eprintln!("Failed to trigger toggle at {} sats: {:#}", max_crossed, e);
-                        } else {
-                            triggered_effects.push(format_toggle_description(toggle));
-                        }
+                        fire_toggle(config, toggle, &mut triggered_effects, &format!("Failed to trigger toggle at {} sats", max_crossed)).await;
                     }
                 }
                 true
@@ -169,20 +159,73 @@ async fn trigger_toggles(
         false
     };
 
-    // Trigger default toggles if no threshold was triggered
+    // A single boost at least this large, when no running-total line was crossed.
+    let mut amount_triggered = false;
     if !threshold_triggered {
-        for toggle in toggles.iter().filter(|t| t.is_default) {
+        let amount_toggles: Vec<_> = toggles.iter()
+            .filter(|t| !t.is_default && t.amount > 0 && sats >= t.amount)
+            .collect();
+
+        if let Some(toggle) = amount_toggles.iter().max_by_key(|t| t.amount) {
+            amount_triggered = true;
+            if amount_toggles.len() > 1 {
+                println!("Multiple amounts matched, applying only maximum: {} sats", toggle.amount);
+            } else {
+                println!("Triggering amount: {} sats >= {}", sats, toggle.amount);
+            }
+
             let should_trigger = toggle.endswith_range
                 .map_or(true, |(start, end)| {
-                    let in_range = last_digit >= start && last_digit <= end;
+                    let in_range = last_two_digits >= start && last_two_digits <= end;
                     if !in_range {
-                        println!("Default toggle skipped: {} sats ends with {}, not in range {}-{}", sats, last_digit, start, end);
+                        println!("Toggle skipped: {} sats ends with {}, not in range {}-{}", sats, last_two_digits, start, end);
                     }
                     in_range
                 });
 
             if should_trigger {
-                println!("Default toggle triggered for {} sats - {} output", sats, toggle.output);
+                fire_toggle(config, toggle, &mut triggered_effects, "Failed to trigger amount toggle").await;
+            }
+        }
+    }
+
+    // The boost's digits end with this value, with no amount or threshold required.
+    let mut ends_with_triggered = false;
+    if !threshold_triggered && !amount_triggered {
+        let ending_toggles: Vec<_> = toggles.iter()
+            .filter(|t| !t.is_default && t.threshold == 0 && t.amount == 0)
+            .filter(|t| t.ends_with.is_some_and(|suffix| sats_end_with(sats, suffix)))
+            .collect();
+
+        if let Some(toggle) = ending_toggles.iter().max_by_key(|t| {
+            let suffix = t.ends_with.unwrap_or(0);
+            (suffix_digits(suffix), suffix)
+        }) {
+            ends_with_triggered = true;
+            let suffix = toggle.ends_with.unwrap_or(0);
+            if ending_toggles.len() > 1 {
+                println!("Multiple endings matched, applying only the longest: {}", suffix);
+            } else {
+                println!("Triggering ending: {} sats ends with {}", sats, suffix);
+            }
+            fire_toggle(config, toggle, &mut triggered_effects, "Failed to trigger ending toggle").await;
+        }
+    }
+
+    // Trigger default toggles if nothing else matched
+    if !threshold_triggered && !amount_triggered && !ends_with_triggered {
+        for toggle in toggles.iter().filter(|t| t.is_default) {
+            let should_trigger = toggle.endswith_range
+                .map_or(true, |(start, end)| {
+                    let in_range = last_two_digits >= start && last_two_digits <= end;
+                    if !in_range {
+                        println!("Default toggle skipped: {} sats ends with {}, not in range {}-{}", sats, last_two_digits, start, end);
+                    }
+                    in_range
+                });
+
+            if should_trigger {
+                println!("Default toggle triggered for {} sats - {}", sats, actions::describe(&toggle.actions));
                 if let Err(e) = trigger_single_toggle(config, toggle).await {
                     eprintln!("Failed to trigger default toggle: {:#}", e);
                 } else {
@@ -193,6 +236,33 @@ async fn trigger_toggles(
     }
 
     Ok(triggered_effects)
+}
+
+/// True when the decimal digits of `sats` end with `suffix`.
+/// `1` matches 1, 11, and 101. `21` matches 21 and 121, and not 1.
+fn sats_end_with(sats: i64, suffix: i64) -> bool {
+    if suffix < 0 {
+        return false;
+    }
+    let sats = sats.unsigned_abs();
+    let suffix = suffix as u64;
+    let mut modulus = 10u64;
+    let mut rest = suffix;
+    while rest >= 10 {
+        modulus = modulus.saturating_mul(10);
+        rest /= 10;
+    }
+    sats % modulus == suffix
+}
+
+fn suffix_digits(suffix: i64) -> u32 {
+    let mut n = suffix.unsigned_abs();
+    let mut digits = 1u32;
+    while n >= 10 {
+        digits += 1;
+        n /= 10;
+    }
+    digits
 }
 
 async fn trigger_effects(
@@ -215,7 +285,7 @@ async fn process_boost(
     sats: i64,
     tx: &tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: &Arc<Mutex<sat_tracker::SatTracker>>,
-    config: &config::Config,
+    config: &SharedConfig,
     trigger_effects_flag: bool
 ) {
     let total = tracker.lock().await.add(source, sats);
@@ -224,7 +294,7 @@ async fn process_boost(
     let _ = tx.send(GuiMessage::UpdateSatTotal(total)).await;
 
     let effects = if trigger_effects_flag {
-        trigger_effects(config.clone(), sats, Some(tracker.clone())).await.unwrap_or_default()
+        trigger_effects(snapshot(config), sats, Some(tracker.clone())).await.unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -235,7 +305,7 @@ async fn process_boost(
 async fn sync_threshold_triggers(config: &config::Config, tracker: &Arc<Mutex<sat_tracker::SatTracker>>) {
     if let Some(toggles) = &config.toggles {
         let thresholds: Vec<i64> = toggles.iter()
-            .filter(|t| !t.is_default && t.use_total && t.threshold > 0)
+            .filter(|t| !t.is_default && t.threshold > 0)
             .map(|t| t.threshold)
             .collect();
 
@@ -260,12 +330,12 @@ async fn handle_connection_error(component: &str, error: anyhow::Error, tx: &tok
 }
 
 async fn listen_for_zaps(
-    config: config::Config,
+    cfg: config::Zaps,
+    config: SharedConfig,
     tx: tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: Arc<Mutex<sat_tracker::SatTracker>>,
     cancel_token: CancellationToken
 ) {
-    let cfg = config.zaps.clone().unwrap();
     initialize_listener("Zaps", &tx).await;
 
     let zap = match zaps::Zaps::new(&cfg.relay_addrs, &cfg.naddr).await {
@@ -305,12 +375,12 @@ async fn listen_for_zaps(
 }
 
 async fn listen_for_boostboard(
-    config: config::Config,
+    cfg: config::BoostBoard,
+    config: SharedConfig,
     tx: tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: Arc<Mutex<sat_tracker::SatTracker>>,
     cancel_token: CancellationToken
 ) {
-    let cfg = config.boostboard.clone().unwrap();
     initialize_listener("Boostboard", &tx).await;
 
     if cfg.relay_addrs.is_empty() {
@@ -348,7 +418,7 @@ async fn listen_for_boostboard(
         }
     }).await;
 
-    sync_threshold_triggers(&config, &tracker).await;
+    sync_threshold_triggers(&snapshot(&config), &tracker).await;
 
     let subscription_id = match board.subscribe(load_since).await {
         Ok(id) => id,
@@ -389,12 +459,12 @@ async fn listen_for_boostboard(
 }
 
 async fn listen_for_nwc(
-    config: config::Config,
+    cfg: config::NWC,
+    config: SharedConfig,
     tx: tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: Arc<Mutex<sat_tracker::SatTracker>>,
     cancel_token: CancellationToken
 ) {
-    let cfg = config.nwc.clone().unwrap();
     initialize_listener("NWC", &tx).await;
 
     let filters = boostboard::BoostFilters {
@@ -422,7 +492,7 @@ async fn listen_for_nwc(
         }
     }).await.unwrap_or(None);
 
-    sync_threshold_triggers(&config, &tracker).await;
+    sync_threshold_triggers(&snapshot(&config), &tracker).await;
 
     let subscription_start = latest_boost_timestamp.map(|ts| ts + 1).unwrap_or(load_since);
     println!("Waiting for NWC boosts...");
@@ -457,27 +527,28 @@ async fn listen_for_nwc(
 async fn start_listener(
     name: &str,
     handles: &Arc<Mutex<HashMap<String, (JoinHandle<()>, CancellationToken)>>>,
-    config: &config::Config,
+    config: &SharedConfig,
     tx: &tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: &Arc<Mutex<sat_tracker::SatTracker>>
 ) {
     stop_listener(name, handles).await;
 
+    let current = snapshot(config);
     let cancel_token = CancellationToken::new();
     let cancel_clone = cancel_token.clone();
 
     let handle = match name {
-        "Zaps" if config.zaps.is_some() => {
-            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move { listen_for_zaps(cfg, tx, tracker, cancel_clone).await })
+        "Zaps" if current.zaps.is_some() => {
+            let (cfg, shared, tx, tracker) = (current.zaps.unwrap(), config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_zaps(cfg, shared, tx, tracker, cancel_clone).await })
         },
-        "Boostboard" if config.boostboard.is_some() => {
-            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move { listen_for_boostboard(cfg, tx, tracker, cancel_clone).await })
+        "Boostboard" if current.boostboard.is_some() => {
+            let (cfg, shared, tx, tracker) = (current.boostboard.unwrap(), config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_boostboard(cfg, shared, tx, tracker, cancel_clone).await })
         },
-        "NWC" if config.nwc.is_some() => {
-            let (cfg, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move { listen_for_nwc(cfg, tx, tracker, cancel_clone).await })
+        "NWC" if current.nwc.is_some() => {
+            let (cfg, shared, tx, tracker) = (current.nwc.unwrap(), config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_nwc(cfg, shared, tx, tracker, cancel_clone).await })
         },
         _ => {
             eprintln!("Cannot start {}: not configured or unknown", name);
@@ -486,6 +557,81 @@ async fn start_listener(
     };
 
     handles.lock().await.insert(name.to_string(), (handle, cancel_token));
+}
+
+/// What a reload should do with one input listener.
+#[derive(Debug, PartialEq)]
+enum ListenerChange {
+    Unchanged,
+    Restart,
+    Stop,
+}
+
+fn listener_change<T: PartialEq>(old: &Option<T>, new: &Option<T>) -> ListenerChange {
+    if old == new {
+        ListenerChange::Unchanged
+    } else if new.is_some() {
+        ListenerChange::Restart
+    } else {
+        ListenerChange::Stop
+    }
+}
+
+async fn reload_config(
+    config: &SharedConfig,
+    handles: &Arc<Mutex<HashMap<String, (JoinHandle<()>, CancellationToken)>>>,
+    tx: &tokio::sync::mpsc::Sender<GuiMessage>,
+    tracker: &Arc<Mutex<sat_tracker::SatTracker>>,
+) {
+    println!("Reloading config...");
+    let new = match config::load_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Config reload failed: {:#}", e);
+            let _ = tx.send(GuiMessage::ConfigReloadFailed(format!("{:#}", e))).await;
+            return;
+        }
+    };
+
+    let old = snapshot(config);
+    {
+        let mut guard = config.write().unwrap();
+        *guard = new.clone();
+    }
+
+    for (name, change) in [
+        ("NWC", listener_change(&old.nwc, &new.nwc)),
+        ("Boostboard", listener_change(&old.boostboard, &new.boostboard)),
+        ("Zaps", listener_change(&old.zaps, &new.zaps)),
+    ] {
+        match change {
+            ListenerChange::Unchanged => {}
+            ListenerChange::Restart => {
+                println!("Restarting {} listener after config reload", name);
+                start_listener(name, handles, config, tx, tracker).await;
+            }
+            ListenerChange::Stop => {
+                println!("Stopping {} listener after config reload", name);
+                stop_listener(name, handles).await;
+                let _ = tx.send(GuiMessage::UpdateStatus(name.to_string(), ComponentStatus::Disabled)).await;
+            }
+        }
+    }
+
+    let setup_cfg = new.clone();
+    let setup_tx = tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = setup_effects(setup_cfg).await {
+            eprintln!("Error setting up effects: {:#}", e);
+            let _ = setup_tx.send(GuiMessage::UpdateStatus(
+                "Effects".to_string(),
+                ComponentStatus::Error(format!("{:#}", e)),
+            )).await;
+        }
+    });
+
+    println!("Config reloaded");
+    let _ = tx.send(GuiMessage::ConfigReloaded(Box::new(new))).await;
 }
 
 async fn stop_listener(
@@ -508,13 +654,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BlinkyBoosts...");
 
     let config = config::load_config()?;
+    let shared: SharedConfig = Arc::new(std::sync::RwLock::new(config));
     let rt = tokio::runtime::Runtime::new()?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<GuiMessage>(100);
     let sat_tracker = Arc::new(Mutex::new(sat_tracker::SatTracker::new()));
 
     // Setup effects
     rt.spawn({
-        let config = config.clone();
+        let config = snapshot(&shared);
         let tx = tx.clone();
         async move {
             if let Err(e) = setup_effects(config).await {
@@ -530,15 +677,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start initial listeners
     rt.spawn({
-        let (handles, config, tx, tracker) = (listener_handles.clone(), config.clone(), tx.clone(), sat_tracker.clone());
+        let (handles, config, tx, tracker) = (listener_handles.clone(), shared.clone(), tx.clone(), sat_tracker.clone());
         async move {
-            if config.zaps.is_some() {
+            let cfg = snapshot(&config);
+            if cfg.zaps.is_some() {
                 start_listener("Zaps", &handles, &config, &tx, &tracker).await;
             }
-            if config.boostboard.is_some() {
+            if cfg.boostboard.is_some() {
                 start_listener("Boostboard", &handles, &config, &tx, &tracker).await;
             }
-            if config.nwc.is_some() {
+            if cfg.nwc.is_some() {
                 start_listener("NWC", &handles, &config, &tx, &tracker).await;
             }
         }
@@ -547,13 +695,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Message handler
     let (gui_tx, gui_rx) = tokio::sync::mpsc::channel::<GuiMessage>(100);
     rt.spawn({
-        let (config, tracker, handles) = (config.clone(), sat_tracker.clone(), listener_handles.clone());
+        let (config, tracker, handles) = (shared.clone(), sat_tracker.clone(), listener_handles.clone());
         async move {
             while let Some(msg) = rx.recv().await {
                 match msg {
                     GuiMessage::TestTrigger(sats) => {
                         println!("Test trigger received for {} sats", sats);
                         process_boost("Test", sats, &gui_tx, &tracker, &config, true).await;
+                    },
+                    GuiMessage::RunAction(name) => {
+                        println!("Manual action triggered: {}", name);
+                        let (current, tx) = (snapshot(&config), gui_tx.clone());
+                        tokio::spawn(async move {
+                            // A manual look replaces the current one, so a waiting revert must not undo it.
+                            revert::cancel_pending().await;
+                            let names = [name.clone()];
+                            let err = actions::run(&current, &names).await
+                                .err()
+                                .map(|e| format!("{:#}", e));
+                            if let Some(e) = &err {
+                                eprintln!("Manual action '{}' failed: {}", name, e);
+                            }
+                            let _ = tx.send(GuiMessage::ActionFinished(name, err)).await;
+                        });
                     },
                     GuiMessage::StartListener(name) => {
                         println!("Starting listener: {}", name);
@@ -563,6 +727,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Stopping listener: {}", name);
                         stop_listener(&name, &handles).await;
                     },
+                    GuiMessage::ReloadConfig => {
+                        reload_config(&config, &handles, &gui_tx, &tracker).await;
+                    },
                     other => { let _ = gui_tx.send(other).await; }
                 }
             }
@@ -571,4 +738,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     gui::run_gui(tx, gui_rx)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reload_restarts_only_changed_inputs() {
+        let nwc = config::NWC { uri: "a".into(), filters: Default::default() };
+        assert_eq!(listener_change(&Some(nwc.clone()), &Some(nwc.clone())), ListenerChange::Unchanged);
+        let changed = config::NWC { uri: "b".into(), filters: Default::default() };
+        assert_eq!(listener_change(&Some(nwc.clone()), &Some(changed)), ListenerChange::Restart);
+        assert_eq!(listener_change(&Some(nwc), &None), ListenerChange::Stop);
+        assert_eq!(listener_change::<config::NWC>(&None, &None), ListenerChange::Unchanged);
+    }
+
+    #[test]
+    fn ending_match_uses_the_digits_given() {
+        assert!(sats_end_with(101, 1));
+        assert!(sats_end_with(11, 1));
+        assert!(sats_end_with(1, 1));
+        assert!(!sats_end_with(101, 2));
+        assert!(sats_end_with(121, 21));
+        assert!(!sats_end_with(101, 21));
+        assert!(sats_end_with(100, 0));
+        assert!(!sats_end_with(101, 0));
+    }
 }

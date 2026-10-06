@@ -1,6 +1,6 @@
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 
 pub struct Osc {
     sock: UdpSocket,
@@ -34,23 +34,5 @@ impl Osc {
             .with_context(|| format!("Failed to send OSC message to {}", self.to_addr))?;
 
         Ok(())
-    }
-
-    pub fn trigger_for_sats(&self, sats: i64) -> Result<()> {
-        // Send the sats value as an integer to the /boost path
-        self.trigger_path("/boost", vec![OscType::Int(sats as i32)])
-    }
-
-    pub fn trigger_toggle(&self, toggle: &crate::config::Toggle) -> Result<()> {
-        let osc_config = toggle.osc.as_ref()
-            .ok_or_else(|| anyhow!("OSC toggle missing 'osc' configuration"))?;
-
-        let arg = match &osc_config.arg_value {
-            crate::config::OscArgValue::String(s) => OscType::String(s.clone()),
-            crate::config::OscArgValue::Int(i) => OscType::Int(*i as i32),
-            crate::config::OscArgValue::Float(f) => OscType::Float(*f as f32),
-        };
-
-        self.trigger_path(&osc_config.path, vec![arg])
     }
 }
