@@ -75,6 +75,9 @@ async fn dispatch(kind: &Target, command: &Command) -> Result<()> {
         (Target::Obs(cfg), Command::Obs { scene }) => {
             crate::obs::trigger_toggle(cfg, scene).await
         }
+        (Target::Obs(cfg), Command::ObsMute { input, muted }) => {
+            crate::obs::trigger_mute(cfg, input, *muted).await
+        }
         _ => Err(anyhow!("Action command does not match target type")),
     }
 }

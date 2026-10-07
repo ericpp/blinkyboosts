@@ -16,6 +16,7 @@ mod sacn;
 mod wled;
 mod obs;
 mod zaps;
+mod splitkit;
 mod gui;
 mod sat_tracker;
 mod revert;
@@ -113,6 +114,9 @@ async fn trigger_toggles(
 
     let last_two_digits = (sats % 100).abs() as u8;
     let mut triggered_effects = Vec::new();
+
+    // Effect toggles fire only from SplitKit broadcasts, never from sats.
+    let toggles: Vec<_> = toggles.iter().filter(|t| t.effect.is_none()).collect();
 
     // Check threshold-based toggles
     let threshold_toggles: Vec<_> = toggles.iter()
@@ -521,6 +525,71 @@ async fn listen_for_nwc(
     }
 }
 
+async fn listen_for_splitkit(
+    cfg: config::SplitKit,
+    config: SharedConfig,
+    tx: tokio::sync::mpsc::Sender<GuiMessage>,
+    cancel_token: CancellationToken
+) {
+    initialize_listener("SplitKit", &tx).await;
+
+    loop {
+        println!("Connecting to SplitKit at {}...", cfg.url);
+        let result = tokio::select! {
+            result = splitkit::subscribe(&cfg.url, |effect: splitkit::FiredEffect| {
+                let (config, tx) = (config.clone(), tx.clone());
+                async move {
+                    println!(
+                        "SplitKit effect '{}': {} says \"{}\"",
+                        effect.label, effect.sender_name, effect.message
+                    );
+                    let current = snapshot(&config);
+                    let mut triggered = Vec::new();
+                    if let Some(toggles) = &current.toggles {
+                        for toggle in toggles.iter().filter(|t| t.effect.as_deref() == Some(effect.id.as_str())) {
+                            fire_toggle(
+                                &current,
+                                toggle,
+                                &mut triggered,
+                                &format!("Failed to trigger SplitKit effect '{}'", effect.id),
+                            ).await;
+                        }
+                    }
+                    let _ = tx.send(GuiMessage::BoostReceived(
+                        format!("SplitKit: {} ({})", effect.label, effect.sender_name),
+                        0,
+                        triggered,
+                    )).await;
+                }
+            }) => result,
+            _ = cancel_token.cancelled() => {
+                println!("SplitKit listener cancelled");
+                let _ = tx.send(GuiMessage::UpdateStatus("SplitKit".to_string(), ComponentStatus::Disabled)).await;
+                return;
+            }
+        };
+
+        let (message, wait) = match result {
+            Ok(()) => ("connection ended".to_string(), 5),
+            Err(e) if e.downcast_ref::<splitkit::LiveDisabled>().is_some() => {
+                ("live mode disabled".to_string(), 30)
+            }
+            Err(e) => (format!("{:#}", e), 5),
+        };
+        eprintln!("SplitKit: {}, retrying in {}s", message, wait);
+        let _ = tx.send(GuiMessage::UpdateStatus("SplitKit".to_string(), ComponentStatus::Error(message))).await;
+
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(wait)) => {}
+            _ = cancel_token.cancelled() => {
+                println!("SplitKit listener cancelled");
+                let _ = tx.send(GuiMessage::UpdateStatus("SplitKit".to_string(), ComponentStatus::Disabled)).await;
+                return;
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Listener Management
 // ============================================================================
@@ -550,6 +619,10 @@ async fn start_listener(
         "NWC" if current.nwc.is_some() => {
             let (cfg, shared, tx, tracker) = (current.nwc.unwrap(), config.clone(), tx.clone(), tracker.clone());
             tokio::spawn(async move { listen_for_nwc(cfg, shared, tx, tracker, cancel_clone).await })
+        },
+        "SplitKit" if current.splitkit.is_some() => {
+            let (cfg, shared, tx) = (current.splitkit.unwrap(), config.clone(), tx.clone());
+            tokio::spawn(async move { listen_for_splitkit(cfg, shared, tx, cancel_clone).await })
         },
         _ => {
             eprintln!("Cannot start {}: not configured or unknown", name);
@@ -604,6 +677,7 @@ async fn reload_config(
         ("NWC", listener_change(&old.nwc, &new.nwc)),
         ("Boostboard", listener_change(&old.boostboard, &new.boostboard)),
         ("Zaps", listener_change(&old.zaps, &new.zaps)),
+        ("SplitKit", listener_change(&old.splitkit, &new.splitkit)),
     ] {
         match change {
             ListenerChange::Unchanged => {}
@@ -689,6 +763,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if cfg.nwc.is_some() {
                 start_listener("NWC", &handles, &config, &tx, &tracker).await;
+            }
+            if cfg.splitkit.is_some() {
+                start_listener("SplitKit", &handles, &config, &tx, &tracker).await;
             }
         }
     });

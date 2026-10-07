@@ -9,6 +9,10 @@ naddr = "naddr1qq9rzdesxvcnzwfjxgcsyg9e6qkt3lw7kxghq8kqvj8r0mgldta6yclqqc8uqcye5
 [nwc]
 uri = "nostr+walletconnect://abcdef..."
 
+# SplitKit live socket. Broadcasts fired effects to every connected client.
+# [splitkit]
+# url = "wss://example.com/api/live/ws"
+
 [targets.osc]
 type = "osc"
 address = "127.0.0.1:7700"
@@ -23,7 +27,7 @@ type = "sacn"
 broadcast_address = ""
 universe = 1
 
-# OBS over obs-websocket v5. Switches the program scene by name.
+# OBS over obs-websocket v5. Switches the program scene, or mutes an audio input.
 # [targets.obs]
 # type = "obs"
 # host = "127.0.0.1"
@@ -478,6 +482,12 @@ preset = "BOOST-0"
 # [actions.obs_cam2]
 # target = "obs"
 # scene = "Camera 2"
+#
+# muted = true mutes, false unmutes, and omitting it toggles.
+# [actions.mic_off]
+# target = "obs"
+# input = "Mic/Aux"
+# muted = true
 
 # One name covering lights and a strip together
 [[actions.big_hit]]
@@ -541,6 +551,15 @@ actions = ["boost0"]
 #
 # [[toggles]]
 # threshold = 250_000
+# revert_after = 30
+# actions = ["big_hit"]
+# revert = ["boost0"]
+
+# Fires when SplitKit broadcasts an effect with this id. Ids are wide, dj,
+# festoons, bubbles, and mystery. Effect toggles cannot also set a threshold,
+# amount, or ending.
+# [[toggles]]
+# effect = "dj"
 # revert_after = 30
 # actions = ["big_hit"]
 # revert = ["boost0"]

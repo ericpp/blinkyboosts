@@ -1,4 +1,4 @@
-use crate::config::{Config, BoostBoard, NWC, Target, Zaps, BoostFiltersConfig};
+use crate::config::{Config, BoostBoard, NWC, SplitKit, Target, Zaps, BoostFiltersConfig};
 use eframe::egui;
 use egui::{Color32, RichText, Ui, ViewportBuilder};
 use std::sync::{Arc, Mutex};
@@ -195,6 +195,15 @@ impl BlinkyBoostsApp {
                     ));
                 }
             },
+            "SplitKit" => {
+                if enabled {
+                    cfg.splitkit = None;
+                } else {
+                    cfg.splitkit = Some(orig_cfg.splitkit.clone().unwrap_or_else(||
+                        SplitKit { url: String::new() }
+                    ));
+                }
+            },
             _ => return,
         }
 
@@ -228,7 +237,7 @@ impl BlinkyBoostsApp {
             self.statuses.insert(name, status);
         }
         self.statuses.retain(|name, _| {
-            matches!(name.as_str(), "NWC" | "Boostboard" | "Zaps" | "Effects")
+            matches!(name.as_str(), "NWC" | "Boostboard" | "Zaps" | "SplitKit" | "Effects")
                 || config.targets.contains_key(name)
         });
         self.action_status.retain(|name, _| config.actions.contains_key(name));
@@ -339,6 +348,16 @@ impl BlinkyBoostsApp {
                         zaps.relay_addrs.push("".into());
                         *changed = true;
                     }
+                }
+            }
+            "SplitKit" => {
+                if let Some(splitkit) = &mut self.modified_config.splitkit {
+                    ui.horizontal(|ui| {
+                        ui.label("URL:");
+                        if ui.text_edit_singleline(&mut splitkit.url).changed() {
+                            *changed = true;
+                        }
+                    });
                 }
             }
             _ => {}
@@ -652,7 +671,7 @@ impl eframe::App for BlinkyBoostsApp {
             ui.columns(2, |cols| {
                 cols[0].heading("Inputs");
                 cols[0].separator();
-                for name in ["NWC", "Boostboard", "Zaps"] {
+                for name in ["NWC", "Boostboard", "Zaps", "SplitKit"] {
                     self.render_component(&mut cols[0], name);
                 }
 
@@ -735,6 +754,7 @@ fn component_statuses(config: &Config) -> std::collections::HashMap<String, Comp
         ("NWC", config.nwc.is_some()),
         ("Boostboard", config.boostboard.is_some()),
         ("Zaps", config.zaps.is_some()),
+        ("SplitKit", config.splitkit.is_some()),
     ] {
         statuses.insert(
             name.to_string(),
@@ -761,6 +781,7 @@ pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>)
                 nwc: None,
                 boostboard: None,
                 zaps: None,
+                splitkit: None,
                 targets: std::collections::BTreeMap::new(),
                 actions: std::collections::BTreeMap::new(),
                 toggles: None,

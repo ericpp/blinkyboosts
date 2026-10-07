@@ -9,6 +9,8 @@ pub struct Config {
     pub nwc: Option<NWC>,
     pub boostboard: Option<BoostBoard>,
     pub zaps: Option<Zaps>,
+    /// SplitKit live WebSocket, which broadcasts fired effects.
+    pub splitkit: Option<SplitKit>,
     /// Named output destinations, e.g. `[targets.lights]`.
     #[serde(default)]
     pub targets: BTreeMap<String, TargetConfig>,
@@ -51,6 +53,15 @@ pub struct Zaps {
     pub naddr: String,
     pub load_since: Option<String>,  // Load zaps since this timestamp (e.g., "2025-01-11 00:00:00")
 }
+
+/// A SplitKit live socket. Fired effects arrive as broadcasts on `url`.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct SplitKit {
+    pub url: String,
+}
+
+/// Effect ids the SplitKit live socket broadcasts, in catalog order.
+pub const SPLITKIT_EFFECTS: &[&str] = &["wide", "dj", "festoons", "bubbles", "mystery"];
 
 /// A named destination plus whether the GUI has it switched on.
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -103,7 +114,7 @@ impl Target {
                 | (Target::Artnet(_), Command::Dmx { .. })
                 | (Target::Sacn(_), Command::Dmx { .. })
                 | (Target::Wled(_), Command::Wled { .. })
-                | (Target::Obs(_), Command::Obs { .. })
+                | (Target::Obs(_), Command::Obs { .. } | Command::ObsMute { .. })
         )
     }
 }
@@ -205,6 +216,13 @@ pub enum Command {
     Dmx { channel: u16, value: u8, universe: Option<u16> },
     Wled { preset: String },
     Obs { scene: String },
+    /// Mute, unmute, or toggle an OBS audio input by name.
+    /// `muted` omitted means toggle.
+    ObsMute {
+        input: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        muted: Option<bool>,
+    },
 }
 
 impl Command {
@@ -215,6 +233,7 @@ impl Command {
             Command::Dmx { .. } => "channel/value",
             Command::Wled { .. } => "preset",
             Command::Obs { .. } => "scene",
+            Command::ObsMute { .. } => "input/muted",
         }
     }
 }
@@ -247,6 +266,9 @@ pub struct Toggle {
     /// Fires when the boost's digits end with this value. `1` matches 1, 11, and 101.
     #[serde(default)]
     pub ends_with: Option<i64>,
+    /// Fires when SplitKit broadcasts an effect with this id, e.g. "dj".
+    #[serde(default)]
+    pub effect: Option<String>,
     #[serde(default)]
     pub is_default: bool,
     #[serde(default = "default_true")]
@@ -301,6 +323,27 @@ impl Config {
         for (index, toggle) in self.toggles.as_deref().unwrap_or(&[]).iter().enumerate() {
             if toggle.threshold > 0 && toggle.amount > 0 {
                 bail!("toggle #{}: set threshold or amount, not both", index + 1);
+            }
+            if let Some(effect) = &toggle.effect {
+                if toggle.threshold > 0
+                    || toggle.amount > 0
+                    || toggle.ends_with.is_some()
+                    || toggle.endswith_range.is_some()
+                    || toggle.is_default
+                {
+                    bail!(
+                        "toggle #{}: effect toggles cannot also set threshold/amount/ends_with/is_default",
+                        index + 1
+                    );
+                }
+                if !SPLITKIT_EFFECTS.contains(&effect.as_str()) {
+                    bail!(
+                        "toggle #{}: unknown effect '{}' (expected one of {})",
+                        index + 1,
+                        effect,
+                        SPLITKIT_EFFECTS.join(", ")
+                    );
+                }
             }
             for name in toggle.actions.iter().chain(toggle.revert.iter()) {
                 if !self.actions.contains_key(name) {
@@ -477,6 +520,55 @@ mod tests {
     }
 
     #[test]
+    fn obs_mute_action_parses_set_and_toggle() {
+        let cfg = parse(r#"
+            [targets.obs]
+            type = "obs"
+            host = "127.0.0.1"
+
+            [actions.mic_off]
+            target = "obs"
+            input = "Mic/Aux"
+            muted = true
+
+            [actions.mic_toggle]
+            target = "obs"
+            input = "Desktop Audio"
+        "#);
+        cfg.validate().unwrap();
+        let off = &cfg.actions["mic_off"].as_slice()[0];
+        assert!(matches!(
+            &off.command,
+            Command::ObsMute { input, muted: Some(true) } if input == "Mic/Aux"
+        ));
+        let toggle = &cfg.actions["mic_toggle"].as_slice()[0];
+        assert!(matches!(
+            &toggle.command,
+            Command::ObsMute { input, muted: None } if input == "Desktop Audio"
+        ));
+    }
+
+    #[test]
+    fn rejects_obs_mute_on_wled_target() {
+        let cfg = parse(r#"
+            [targets.strip]
+            type = "wled"
+            host = "10.0.0.20"
+            boost_playlist = "BOOST"
+            brightness = 128
+            setup = false
+            force = false
+
+            [actions.mic]
+            target = "strip"
+            input = "Mic/Aux"
+            muted = false
+        "#);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert_eq!(err, "action 'mic': target 'strip' is wled but action has input/muted");
+    }
+
+    #[test]
     fn rejects_obs_scene_on_wled_target() {
         let cfg = parse(r#"
             [targets.strip]
@@ -504,6 +596,62 @@ mod tests {
         "#);
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(err, "toggle #1: set threshold or amount, not both");
+    }
+
+    #[test]
+    fn effect_toggle_parses() {
+        let cfg = parse(r#"
+            [splitkit]
+            url = "wss://example.com/api/live/ws"
+
+            [actions.dj_look]
+            target = "lights"
+            path = "/gma3/cmd"
+            arg_value = "Goto Sequence 54 Cue 3"
+
+            [targets.lights]
+            type = "osc"
+            address = "10.0.0.184:8000"
+
+            [[toggles]]
+            effect = "dj"
+            revert_after = 30
+            actions = ["dj_look"]
+        "#);
+        cfg.validate().unwrap();
+        assert_eq!(cfg.splitkit.unwrap().url, "wss://example.com/api/live/ws");
+        let toggle = &cfg.toggles.unwrap()[0];
+        assert_eq!(toggle.effect.as_deref(), Some("dj"));
+        assert_eq!(toggle.revert_after, Some(30));
+    }
+
+    #[test]
+    fn rejects_effect_toggle_that_also_matches_sats() {
+        let cfg = parse(r#"
+            [[toggles]]
+            threshold = 1
+            [[toggles]]
+            effect = "dj"
+            amount = 1000
+        "#);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "toggle #2: effect toggles cannot also set threshold/amount/ends_with/is_default"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_effect_id() {
+        let cfg = parse(r#"
+            [[toggles]]
+            effect = "rainbow"
+        "#);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "toggle #1: unknown effect 'rainbow' (expected one of wide, dj, festoons, bubbles, mystery)"
+        );
     }
 
     #[test]
