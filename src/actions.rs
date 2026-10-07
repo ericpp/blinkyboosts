@@ -20,11 +20,13 @@ pub async fn run(config: &Config, names: &[String]) -> Result<()> {
         let Some(output_cfg) = config.outputs.get(&action.output) else {
             eprintln!("Action '{}' skipped: unknown output '{}'", name, action.output);
             last_err = Some(anyhow!("Unknown output '{}'", action.output));
+            hold(name, action.hold_ms).await;
             continue;
         };
 
         if !output_cfg.enabled {
             println!("Skipping action '{}' on disabled output '{}'", name, action.output);
+            hold(name, action.hold_ms).await;
             continue;
         }
 
@@ -36,6 +38,7 @@ pub async fn run(config: &Config, names: &[String]) -> Result<()> {
                 last_err = Some(e);
             }
         }
+        hold(name, action.hold_ms).await;
     }
 
     if sent == 0 {
@@ -80,6 +83,12 @@ async fn dispatch(kind: &Output, command: &Command) -> Result<()> {
         }
         _ => Err(anyhow!("Action command does not match output type")),
     }
+}
+
+async fn hold(name: &str, hold_ms: Option<u64>) {
+    let Some(ms) = hold_ms.filter(|ms| *ms > 0) else { return };
+    println!("Holding action '{}' for {}ms", name, ms);
+    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
 }
 
 fn osc_arg(value: &crate::config::OscArgValue) -> OscType {

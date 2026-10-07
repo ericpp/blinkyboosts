@@ -21,6 +21,7 @@ mod gui;
 mod sat_tracker;
 mod revert;
 mod actions;
+mod queue;
 
 use gui::{ComponentStatus, GuiMessage};
 
@@ -87,22 +88,25 @@ fn format_toggle_description(toggle: &config::Toggle) -> String {
     desc
 }
 
-async fn trigger_single_toggle(config: &config::Config, toggle: &config::Toggle) -> Result<()> {
-    actions::run(config, &toggle.actions).await
-}
-
-async fn fire_toggle(config: &config::Config, toggle: &config::Toggle, triggered_effects: &mut Vec<String>, err_context: &str) {
-    if let Err(e) = trigger_single_toggle(config, toggle).await {
-        eprintln!("{}: {:#}", err_context, e);
-    } else {
+fn fire_toggle(config: &config::Config, toggle: &config::Toggle, triggered_effects: &mut Vec<String>) -> bool {
+    let revert = match toggle.revert_after {
+        Some(secs) if !toggle.revert.is_empty() => Some((secs, toggle.revert.clone())),
+        _ => None,
+    };
+    // The worker runs this after anything already queued, and skips it when the
+    // same actions are already running or waiting.
+    let queued = queue::enqueue(queue::Job {
+        config: config.clone(),
+        names: toggle.actions.clone(),
+        revert,
+        replaces_look: true,
+        skip_duplicate: true,
+        done: None,
+    });
+    if queued {
         triggered_effects.push(format_toggle_description(toggle));
-        // A new look replaces the previous one, so drop any revert still waiting.
-        if toggle.revert_after.is_some() && !toggle.revert.is_empty() {
-            revert::schedule(config.clone(), toggle.clone()).await;
-        } else {
-            revert::cancel_pending().await;
-        }
     }
+    queued
 }
 
 async fn trigger_toggles(
@@ -150,7 +154,7 @@ async fn trigger_toggles(
                         });
 
                     if should_trigger {
-                        fire_toggle(config, toggle, &mut triggered_effects, &format!("Failed to trigger toggle at {} sats", max_crossed)).await;
+                        fire_toggle(config, toggle, &mut triggered_effects);
                     }
                 }
                 true
@@ -189,7 +193,7 @@ async fn trigger_toggles(
                 });
 
             if should_trigger {
-                fire_toggle(config, toggle, &mut triggered_effects, "Failed to trigger amount toggle").await;
+                fire_toggle(config, toggle, &mut triggered_effects);
             }
         }
     }
@@ -213,7 +217,7 @@ async fn trigger_toggles(
             } else {
                 println!("Triggering ending: {} sats ends with {}", sats, suffix);
             }
-            fire_toggle(config, toggle, &mut triggered_effects, "Failed to trigger ending toggle").await;
+            fire_toggle(config, toggle, &mut triggered_effects);
         }
     }
 
@@ -230,11 +234,8 @@ async fn trigger_toggles(
                 });
 
             if should_trigger {
-                println!("Default toggle triggered for {} sats - {}", sats, actions::describe(&toggle.actions));
-                if let Err(e) = trigger_single_toggle(config, toggle).await {
-                    eprintln!("Failed to trigger default toggle: {:#}", e);
-                } else {
-                    triggered_effects.push(format_toggle_description(toggle));
+                if fire_toggle(config, toggle, &mut triggered_effects) {
+                    println!("Default toggle triggered for {} sats - {}", sats, actions::describe(&toggle.actions));
                 }
             }
         }
@@ -561,12 +562,7 @@ async fn listen_for_splitkit(
                     let mut triggered = Vec::new();
                     if let Some(toggles) = &current.toggles {
                         for toggle in toggles.iter().filter(|t| t.effect.as_deref() == Some(effect.id.as_str())) {
-                            fire_toggle(
-                                &current,
-                                toggle,
-                                &mut triggered,
-                                &format!("Failed to trigger {name} effect '{}'", effect.id),
-                            ).await;
+                            fire_toggle(&current, toggle, &mut triggered);
                         }
                     }
                     let _ = tx.send(GuiMessage::BoostReceived(
@@ -800,15 +796,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Manual action triggered: {}", name);
                         let (current, tx) = (snapshot(&config), gui_tx.clone());
                         tokio::spawn(async move {
-                            // A manual look replaces the current one, so a waiting revert must not undo it.
-                            revert::cancel_pending().await;
-                            let names = [name.clone()];
-                            let err = actions::run(&current, &names).await
-                                .err()
-                                .map(|e| format!("{:#}", e));
-                            if let Some(e) = &err {
-                                eprintln!("Manual action '{}' failed: {}", name, e);
-                            }
+                            let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+                            let queued = queue::enqueue(queue::Job {
+                                config: current,
+                                names: vec![name.clone()],
+                                revert: None,
+                                replaces_look: true,
+                                skip_duplicate: false,
+                                done: Some(done_tx),
+                            });
+                            let err = if queued {
+                                match done_rx.await {
+                                    Ok(Ok(())) => None,
+                                    Ok(Err(e)) => Some(format!("{:#}", e)),
+                                    Err(_) => Some("action queue stopped".to_string()),
+                                }
+                            } else {
+                                Some("action queue stopped".to_string())
+                            };
                             let _ = tx.send(GuiMessage::ActionFinished(name, err)).await;
                         });
                     },

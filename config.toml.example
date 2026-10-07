@@ -499,14 +499,20 @@ preset = "BOOST-0"
 # input = "Mic/Aux"
 # muted = true
 
-# One name covering lights and a strip together
+# One name covering lights and a strip together.
+# hold_ms waits after that step before the next one. The last step's hold
+# finishes before the next queued action starts. Actions run one job at a time,
+# so a boost that arrives mid-sequence waits its turn. A boost is skipped when
+# the same action names are already running or waiting.
 [[actions.big_hit]]
 output = "artnet"
 channel = 1
 value = 255
+hold_ms = 1500
 [[actions.big_hit]]
 output = "wled"
 preset = "BOOST-3"
+hold_ms = 4000
 
 # Toggles list action names. They are evaluated by threshold; if none match,
 # default toggles (is_default = true) run.

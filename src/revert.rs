@@ -1,9 +1,10 @@
 use std::sync::OnceLock;
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, Toggle};
+use crate::config::Config;
+use crate::queue::{self, Job};
 
-/// The single pending revert. A newer threshold toggle replaces whatever is waiting.
+/// The single pending revert. A newer look replaces whatever is waiting.
 static PENDING: OnceLock<tokio::sync::Mutex<Option<JoinHandle<()>>>> = OnceLock::new();
 
 fn slot() -> &'static tokio::sync::Mutex<Option<JoinHandle<()>>> {
@@ -23,11 +24,10 @@ pub async fn cancel_pending() {
     abort_locked(&mut guard);
 }
 
-/// Cancel any waiting revert, then run `toggle.revert` after `revert_after` seconds.
-pub async fn schedule(config: Config, toggle: Toggle) {
-    let Some(secs) = toggle.revert_after else { return };
-    if toggle.revert.is_empty() { return };
-    let names = toggle.revert;
+/// Cancel any waiting revert, then queue `names` after `secs` seconds.
+/// The timer starts when this is called, which is when the triggering sequence finishes.
+pub async fn schedule(config: Config, secs: u64, names: Vec<String>) {
+    if names.is_empty() { return };
 
     let mut guard = slot().lock().await;
     abort_locked(&mut guard);
@@ -36,9 +36,14 @@ pub async fn schedule(config: Config, toggle: Toggle) {
         tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
 
         println!("Firing revert after {}s", secs);
-        if let Err(e) = crate::actions::run(&config, &names).await {
-            eprintln!("Failed to run revert: {:#}", e);
-        }
+        queue::enqueue(Job {
+            config,
+            names,
+            revert: None,
+            replaces_look: false,
+            skip_duplicate: false,
+            done: None,
+        });
     });
 
     *guard = Some(handle);

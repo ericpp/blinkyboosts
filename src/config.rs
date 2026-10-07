@@ -247,6 +247,10 @@ pub enum OscArgValue {
 pub struct Action {
     /// Name from `[outputs]`.
     pub output: String,
+    /// Milliseconds to wait after this step before the next one runs.
+    /// A hold on the last step finishes before the next queued action starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_ms: Option<u64>,
     #[serde(flatten)]
     pub command: Command,
 }
@@ -501,6 +505,7 @@ mod tests {
         output = "dmx"
         channel = 1
         value = 255
+        hold_ms = 1500
         [[actions.big_hit]]
         output = "strip"
         preset = "BOOST-Fire"
@@ -509,6 +514,7 @@ mod tests {
         channel = 10
         value = 128
         universe = 4
+        hold_ms = 4000
 
         [[toggles]]
         threshold = 25000
@@ -530,8 +536,11 @@ mod tests {
         assert_eq!(scene.len(), 3);
         assert!(scene.iter().all(|(name, _)| *name == "big_hit"));
         assert!(matches!(scene[0].1.command, Command::Dmx { channel: 1, value: 255, universe: None }));
+        assert_eq!(scene[0].1.hold_ms, Some(1500));
         assert!(matches!(&scene[1].1.command, Command::Wled { preset } if preset == "BOOST-Fire"));
+        assert_eq!(scene[1].1.hold_ms, None);
         assert!(matches!(scene[2].1.command, Command::Dmx { channel: 10, value: 128, universe: Some(4) }));
+        assert_eq!(scene[2].1.hold_ms, Some(4000));
 
         let revert = cfg.resolve(&toggle.revert);
         assert_eq!(revert.len(), 1);
