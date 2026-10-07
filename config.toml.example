@@ -23,6 +23,13 @@ type = "sacn"
 broadcast_address = ""
 universe = 1
 
+# OBS over obs-websocket v5. Switches the program scene by name.
+# [targets.obs]
+# type = "obs"
+# host = "127.0.0.1"
+# port = 4455            # optional, defaults to 4455
+# password = "secret"    # optional, omit if OBS auth is disabled
+
 [targets.wled]
 type = "wled"
 # host = "192.168.2.84"
@@ -467,6 +474,10 @@ preset = "Bowl After Bowl Anim"
 [actions.boost0]
 target = "wled"
 preset = "BOOST-0"
+
+# [actions.obs_cam2]
+# target = "obs"
+# scene = "Camera 2"
 
 # One name covering lights and a strip together
 [[actions.big_hit]]

@@ -14,6 +14,7 @@ mod osc;
 mod artnet;
 mod sacn;
 mod wled;
+mod obs;
 mod zaps;
 mod gui;
 mod sat_tracker;

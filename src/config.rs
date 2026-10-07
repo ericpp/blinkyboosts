@@ -70,6 +70,7 @@ pub enum Target {
     Artnet(ArtNet),
     Sacn(Sacn),
     Wled(WLed),
+    Obs(Obs),
 }
 
 impl Target {
@@ -80,6 +81,7 @@ impl Target {
             Target::Artnet(_) => "artnet",
             Target::Sacn(_) => "sacn",
             Target::Wled(_) => "wled",
+            Target::Obs(_) => "obs",
         }
     }
 
@@ -90,6 +92,7 @@ impl Target {
             Target::Artnet(_) => "Art-Net",
             Target::Sacn(_) => "sACN",
             Target::Wled(_) => "WLED",
+            Target::Obs(_) => "OBS",
         }
     }
 
@@ -100,6 +103,7 @@ impl Target {
                 | (Target::Artnet(_), Command::Dmx { .. })
                 | (Target::Sacn(_), Command::Dmx { .. })
                 | (Target::Wled(_), Command::Wled { .. })
+                | (Target::Obs(_), Command::Obs { .. })
         )
     }
 }
@@ -127,6 +131,16 @@ pub struct WLed {
     pub playlists: Option<Vec<WLedPlaylist>>,
     pub setup: bool,
     pub force: bool,
+}
+
+/// An OBS instance reached over obs-websocket (v5).
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct Obs {
+    pub host: String,
+    /// obs-websocket port. Defaults to 4455 when omitted.
+    pub port: Option<u16>,
+    /// WebSocket password. Omit when OBS authentication is disabled.
+    pub password: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -190,6 +204,7 @@ pub enum Command {
     },
     Dmx { channel: u16, value: u8, universe: Option<u16> },
     Wled { preset: String },
+    Obs { scene: String },
 }
 
 impl Command {
@@ -199,6 +214,7 @@ impl Command {
             Command::Osc { .. } => "path/arg_value",
             Command::Dmx { .. } => "channel/value",
             Command::Wled { .. } => "preset",
+            Command::Obs { .. } => "scene",
         }
     }
 }
@@ -415,6 +431,68 @@ mod tests {
             Command::Osc { path, arg_value: OscArgValue::Int(2), arg_value2: Some(OscArgValue::Int(1)) }
                 if path == "/scene/switchByIndex"
         ));
+    }
+
+    #[test]
+    fn obs_target_and_action_parse() {
+        let cfg = parse(r#"
+            [targets.obs]
+            type = "obs"
+            host = "127.0.0.1"
+            port = 4455
+            password = "secret"
+
+            [actions.obs_cam2]
+            target = "obs"
+            scene = "Camera 2"
+        "#);
+        cfg.validate().unwrap();
+        assert!(matches!(
+            &cfg.targets["obs"].kind,
+            Target::Obs(obs)
+                if obs.host == "127.0.0.1"
+                    && obs.port == Some(4455)
+                    && obs.password.as_deref() == Some("secret")
+        ));
+        let action = &cfg.actions["obs_cam2"].as_slice()[0];
+        assert!(matches!(&action.command, Command::Obs { scene } if scene == "Camera 2"));
+    }
+
+    #[test]
+    fn obs_port_and_password_are_optional() {
+        let cfg = parse(r#"
+            [targets.obs]
+            type = "obs"
+            host = "127.0.0.1"
+
+            [actions.obs_cam2]
+            target = "obs"
+            scene = "Camera 2"
+        "#);
+        cfg.validate().unwrap();
+        assert!(matches!(
+            &cfg.targets["obs"].kind,
+            Target::Obs(obs) if obs.port.is_none() && obs.password.is_none()
+        ));
+    }
+
+    #[test]
+    fn rejects_obs_scene_on_wled_target() {
+        let cfg = parse(r#"
+            [targets.strip]
+            type = "wled"
+            host = "10.0.0.20"
+            boost_playlist = "BOOST"
+            brightness = 128
+            setup = false
+            force = false
+
+            [actions.cam]
+            target = "strip"
+            scene = "Camera 2"
+        "#);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert_eq!(err, "action 'cam': target 'strip' is wled but action has scene");
     }
 
     #[test]

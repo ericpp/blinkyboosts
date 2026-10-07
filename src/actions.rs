@@ -72,6 +72,9 @@ async fn dispatch(kind: &Target, command: &Command) -> Result<()> {
         (Target::Wled(cfg), Command::Wled { preset }) => {
             crate::wled::WLed::trigger_toggle(cfg, preset).await
         }
+        (Target::Obs(cfg), Command::Obs { scene }) => {
+            crate::obs::trigger_toggle(cfg, scene).await
+        }
         _ => Err(anyhow!("Action command does not match target type")),
     }
 }

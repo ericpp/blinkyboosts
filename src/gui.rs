@@ -70,6 +70,7 @@ pub struct BlinkyBoostsApp {
     test_amount: String,
     sat_total: i64,
     action_status: std::collections::HashMap<String, ActionRun>,
+    selected_action: Option<String>,
 }
 
 impl BlinkyBoostsApp {
@@ -91,6 +92,7 @@ impl BlinkyBoostsApp {
             test_amount: "100".to_string(),
             sat_total: 0,
             action_status: std::collections::HashMap::new(),
+            selected_action: None,
         }
     }
 
@@ -230,6 +232,9 @@ impl BlinkyBoostsApp {
                 || config.targets.contains_key(name)
         });
         self.action_status.retain(|name, _| config.actions.contains_key(name));
+        if self.selected_action.as_ref().is_some_and(|name| !config.actions.contains_key(name)) {
+            self.selected_action = None;
+        }
         self.config = config.clone();
         self.modified_config = config;
     }
@@ -466,6 +471,35 @@ impl BlinkyBoostsApp {
                     }
                 });
             }
+            Target::Obs(obs) => {
+                ui.horizontal(|ui| {
+                    ui.label("Host:");
+                    if ui.text_edit_singleline(&mut obs.host).changed() {
+                        *changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Port:");
+                    let mut s = obs.port.map(|p| p.to_string()).unwrap_or_default();
+                    if ui.text_edit_singleline(&mut s).changed() {
+                        if s.is_empty() {
+                            obs.port = None;
+                            *changed = true;
+                        } else if let Ok(n) = s.parse() {
+                            obs.port = Some(n);
+                            *changed = true;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Password:");
+                    let mut password = obs.password.clone().unwrap_or_default();
+                    if ui.add(egui::TextEdit::singleline(&mut password).password(true)).changed() {
+                        obs.password = if password.is_empty() { None } else { Some(password) };
+                        *changed = true;
+                    }
+                });
+            }
         }
     }
 
@@ -491,68 +525,98 @@ impl BlinkyBoostsApp {
             })
             .collect();
 
-        ui.add_space(20.0);
-        egui::CollapsingHeader::new(RichText::new("Actions").heading())
-            .default_open(true)
-            .show(ui, |ui| {
-                if rows.is_empty() {
-                    ui.label("No actions configured");
-                    return;
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(220.0)
-                    .show(ui, |ui| {
-                        for (name, targets) in &rows {
-                            self.render_action_row(ui, name, targets);
-                        }
-                    });
-            });
-    }
+        ui.add_space(10.0);
+        ui.heading("Actions");
+        ui.separator();
+        if rows.is_empty() {
+            ui.label("No actions configured");
+            return;
+        }
 
-    fn render_action_row(&mut self, ui: &mut Ui, name: &str, targets: &[(String, bool)]) {
-        let running = matches!(self.action_status.get(name), Some(ActionRun::Running));
+        if self.selected_action.as_ref().is_some_and(|name| !rows.iter().any(|(n, _)| n == name)) {
+            self.selected_action = None;
+        }
 
         ui.horizontal(|ui| {
             ui.set_height(20.0);
-            ui.label(name);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                for (i, (target, enabled)) in targets.iter().enumerate() {
-                    if i > 0 {
-                        ui.label(", ");
+            let selected_text = self
+                .selected_action
+                .clone()
+                .unwrap_or_else(|| "Select an action".to_string());
+            egui::ComboBox::from_id_source("manual_action")
+                .selected_text(selected_text)
+                .width(240.0)
+                .height(240.0)
+                .show_ui(ui, |ui| {
+                    for (name, targets) in &rows {
+                        let summary = targets
+                            .iter()
+                            .map(|(target, _)| target.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let label = if summary.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{name} ({summary})")
+                        };
+                        ui.selectable_value(&mut self.selected_action, Some(name.clone()), label);
                     }
-                    let text = if *enabled {
-                        RichText::new(target)
-                    } else {
-                        RichText::new(target).color(Color32::GRAY)
-                    };
-                    ui.label(text);
-                }
-            });
+                });
 
-            if ui
-                .add_enabled(!running, egui::Button::new("Run").min_size(egui::vec2(80.0, 20.0)))
-                .clicked()
-                && self.tx.try_send(GuiMessage::RunAction(name.to_string())).is_ok()
-            {
-                self.action_status.insert(name.to_string(), ActionRun::Running);
+            let selected = self.selected_action.clone();
+            if let Some(name) = selected.as_deref() {
+                if let Some((_, targets)) = rows.iter().find(|(n, _)| n == name) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        for (i, (target, enabled)) in targets.iter().enumerate() {
+                            if i > 0 {
+                                ui.label(", ");
+                            }
+                            let text = if *enabled {
+                                RichText::new(target)
+                            } else {
+                                RichText::new(target).color(Color32::GRAY)
+                            };
+                            ui.label(text);
+                        }
+                    });
+                }
             }
 
-            match self.action_status.get(name) {
-                Some(ActionRun::Running) => {
-                    ui.label(RichText::new("Running...").color(Color32::LIGHT_BLUE));
+            let running = selected.as_deref().is_some_and(|name| {
+                matches!(self.action_status.get(name), Some(ActionRun::Running))
+            });
+            if ui
+                .add_enabled(
+                    selected.is_some() && !running,
+                    egui::Button::new("Run").min_size(egui::vec2(80.0, 20.0)),
+                )
+                .clicked()
+            {
+                if let Some(name) = selected.clone() {
+                    if self.tx.try_send(GuiMessage::RunAction(name.clone())).is_ok() {
+                        self.action_status.insert(name, ActionRun::Running);
+                    }
                 }
-                Some(ActionRun::Ok(time)) => {
-                    ui.label(
-                        RichText::new(format!("OK {}", time.format("%H:%M:%S")))
-                            .color(Color32::LIGHT_GREEN),
-                    );
+            }
+
+            if let Some(name) = selected.as_deref() {
+                match self.action_status.get(name) {
+                    Some(ActionRun::Running) => {
+                        ui.label(RichText::new("Running...").color(Color32::LIGHT_BLUE));
+                    }
+                    Some(ActionRun::Ok(time)) => {
+                        ui.label(
+                            RichText::new(format!("OK {}", time.format("%H:%M:%S")))
+                                .color(Color32::LIGHT_GREEN),
+                        );
+                    }
+                    Some(ActionRun::Failed(err)) => {
+                        ui.label(RichText::new("Failed").color(Color32::RED))
+                            .on_hover_text(err);
+                    }
+                    None => {}
                 }
-                Some(ActionRun::Failed(err)) => {
-                    ui.label(RichText::new("Failed").color(Color32::RED))
-                        .on_hover_text(err);
-                }
-                None => {}
             }
         });
     }
@@ -622,19 +686,23 @@ impl eframe::App for BlinkyBoostsApp {
 
             self.render_actions(ui);
 
-            ui.add_space(20.0);
+            ui.add_space(10.0);
             ui.heading("Recent Boosts");
             ui.separator();
-            if self.recent_boosts.is_empty() {
-                ui.label("No recent boosts");
-            } else {
-                for (src, amt, fx, time) in self.recent_boosts.iter().rev() {
-                    let fx_str = if fx.is_empty() { "none" } else { &fx.join(", ") };
-                    let time_str = time.format("%Y-%m-%d %H:%M:%S").to_string();
-                    ui.label(format!("[{}] {} sats from {} → {}",
-                        time_str, amt, src, fx_str));
-                }
-            }
+            egui::ScrollArea::vertical()
+                .max_height(ui.available_height())
+                .show(ui, |ui| {
+                    if self.recent_boosts.is_empty() {
+                        ui.label("No recent boosts");
+                    } else {
+                        for (src, amt, fx, time) in self.recent_boosts.iter().rev() {
+                            let fx_str = if fx.is_empty() { "none" } else { &fx.join(", ") };
+                            let time_str = time.format("%Y-%m-%d %H:%M:%S").to_string();
+                            ui.label(format!("[{}] {} sats from {} → {}",
+                                time_str, amt, src, fx_str));
+                        }
+                    }
+                });
 
             if self.show_save_dialog {
                 egui::Window::new("Save Configuration")
