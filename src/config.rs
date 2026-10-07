@@ -4,16 +4,24 @@ use std::fs;
 use anyhow::{Context, Result, bail};
 use toml;
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct Config {
+    /// Legacy singleton sections. Moved into `inputs` on load and not written back.
+    #[serde(default, skip_serializing)]
     pub nwc: Option<NWC>,
+    #[serde(default, skip_serializing)]
     pub boostboard: Option<BoostBoard>,
+    #[serde(default, skip_serializing)]
     pub zaps: Option<Zaps>,
-    /// SplitKit live WebSocket, which broadcasts fired effects.
+    /// Legacy SplitKit section. Moved into `inputs` on load and not written back.
+    #[serde(default, skip_serializing)]
     pub splitkit: Option<SplitKit>,
-    /// Named output destinations, e.g. `[targets.lights]`.
+    /// Named boost sources, e.g. `[inputs.show_nwc]`. Several may share a type.
     #[serde(default)]
-    pub targets: BTreeMap<String, TargetConfig>,
+    pub inputs: BTreeMap<String, InputConfig>,
+    /// Named output destinations, e.g. `[outputs.lights]`.
+    #[serde(default)]
+    pub outputs: BTreeMap<String, OutputConfig>,
     /// Named commands toggles refer to by name, e.g. `[actions.cue2]`.
     #[serde(default)]
     pub actions: BTreeMap<String, OneOrMany<Action>>,
@@ -60,23 +68,65 @@ pub struct SplitKit {
     pub url: String,
 }
 
+/// A named boost source plus whether the GUI has it switched on.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct InputConfig {
+    /// Defaults to true. The GUI enable/disable switch writes this.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub kind: Input,
+}
+
+/// What an input listens to. The `type` field selects the variant.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Input {
+    Nwc(NWC),
+    Boostboard(BoostBoard),
+    Zaps(Zaps),
+    Splitkit(SplitKit),
+}
+
+impl Input {
+    /// Short name used in config errors, e.g. "nwc".
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Input::Nwc(_) => "nwc",
+            Input::Boostboard(_) => "boostboard",
+            Input::Zaps(_) => "zaps",
+            Input::Splitkit(_) => "splitkit",
+        }
+    }
+
+    /// Label shown in the GUI, e.g. "NWC".
+    pub fn label(&self) -> &'static str {
+        match self {
+            Input::Nwc(_) => "NWC",
+            Input::Boostboard(_) => "Boostboard",
+            Input::Zaps(_) => "Zaps",
+            Input::Splitkit(_) => "SplitKit",
+        }
+    }
+}
+
 /// Effect ids the SplitKit live socket broadcasts, in catalog order.
 pub const SPLITKIT_EFFECTS: &[&str] = &["wide", "dj", "festoons", "bubbles", "mystery"];
 
 /// A named destination plus whether the GUI has it switched on.
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct TargetConfig {
+pub struct OutputConfig {
     /// Defaults to true. The GUI enable/disable switch writes this.
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(flatten)]
-    pub kind: Target,
+    pub kind: Output,
 }
 
-/// What a target talks to. The `type` field selects the variant.
+/// What an output talks to. The `type` field selects the variant.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum Target {
+pub enum Output {
     Osc { address: String },
     Artnet(ArtNet),
     Sacn(Sacn),
@@ -84,37 +134,37 @@ pub enum Target {
     Obs(Obs),
 }
 
-impl Target {
+impl Output {
     /// Short name used in config errors, e.g. "wled".
     pub fn type_name(&self) -> &'static str {
         match self {
-            Target::Osc { .. } => "osc",
-            Target::Artnet(_) => "artnet",
-            Target::Sacn(_) => "sacn",
-            Target::Wled(_) => "wled",
-            Target::Obs(_) => "obs",
+            Output::Osc { .. } => "osc",
+            Output::Artnet(_) => "artnet",
+            Output::Sacn(_) => "sacn",
+            Output::Wled(_) => "wled",
+            Output::Obs(_) => "obs",
         }
     }
 
     /// Label shown in the GUI, e.g. "Art-Net".
     pub fn label(&self) -> &'static str {
         match self {
-            Target::Osc { .. } => "OSC",
-            Target::Artnet(_) => "Art-Net",
-            Target::Sacn(_) => "sACN",
-            Target::Wled(_) => "WLED",
-            Target::Obs(_) => "OBS",
+            Output::Osc { .. } => "OSC",
+            Output::Artnet(_) => "Art-Net",
+            Output::Sacn(_) => "sACN",
+            Output::Wled(_) => "WLED",
+            Output::Obs(_) => "OBS",
         }
     }
 
     fn accepts(&self, command: &Command) -> bool {
         matches!(
             (self, command),
-            (Target::Osc { .. }, Command::Osc { .. })
-                | (Target::Artnet(_), Command::Dmx { .. })
-                | (Target::Sacn(_), Command::Dmx { .. })
-                | (Target::Wled(_), Command::Wled { .. })
-                | (Target::Obs(_), Command::Obs { .. } | Command::ObsMute { .. })
+            (Output::Osc { .. }, Command::Osc { .. })
+                | (Output::Artnet(_), Command::Dmx { .. })
+                | (Output::Sacn(_), Command::Dmx { .. })
+                | (Output::Wled(_), Command::Wled { .. })
+                | (Output::Obs(_), Command::Obs { .. } | Command::ObsMute { .. })
         )
     }
 }
@@ -192,16 +242,16 @@ pub enum OscArgValue {
     String(String),
 }
 
-/// One command sent to one target. The command fields depend on the target's type.
+/// One command sent to one output. The command fields depend on the output's type.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Action {
-    /// Name from `[targets]`.
-    pub target: String,
+    /// Name from `[outputs]`.
+    pub output: String,
     #[serde(flatten)]
     pub command: Command,
 }
 
-/// The payload of an action. Which variant is valid depends on the target type.
+/// The payload of an action. Which variant is valid depends on the output type.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Command {
@@ -286,6 +336,31 @@ pub struct Toggle {
 }
 
 impl Config {
+    /// Move legacy `[nwc]`, `[boostboard]`, `[zaps]`, and `[splitkit]` sections
+    /// into `inputs` under those names. A name already used by `[inputs]` is an error.
+    fn migrate_legacy_inputs(&mut self) -> Result<()> {
+        let legacy = [
+            ("nwc", self.nwc.take().map(Input::Nwc)),
+            ("boostboard", self.boostboard.take().map(Input::Boostboard)),
+            ("zaps", self.zaps.take().map(Input::Zaps)),
+            ("splitkit", self.splitkit.take().map(Input::Splitkit)),
+        ];
+        for (name, kind) in legacy {
+            let Some(kind) = kind else { continue };
+            if self.inputs.contains_key(name) {
+                bail!(
+                    "input '{}' is defined both as [{}] and [inputs.{}]",
+                    name, name, name
+                );
+            }
+            self.inputs.insert(
+                name.to_string(),
+                InputConfig { enabled: true, kind },
+            );
+        }
+        Ok(())
+    }
+
     /// Expand action names into their commands, in the order given.
     /// A scene name contributes one entry per command, each carrying that name.
     pub fn resolve<'a>(&'a self, names: &'a [String]) -> Vec<(&'a str, &'a Action)> {
@@ -301,19 +376,28 @@ impl Config {
     }
 
     /// Check that every toggle names a real action, and every action names a
-    /// real target whose type matches the command.
+    /// real output whose type matches the command.
     pub fn validate(&self) -> Result<()> {
+        for name in self.inputs.keys() {
+            if name == "Effects" {
+                bail!("input name 'Effects' is reserved");
+            }
+            if self.outputs.contains_key(name) {
+                bail!("input '{}' uses the same name as an output", name);
+            }
+        }
+
         for (name, group) in &self.actions {
             for action in group.as_slice() {
-                let Some(target) = self.targets.get(&action.target) else {
-                    bail!("action '{}': unknown target '{}'", name, action.target);
+                let Some(output) = self.outputs.get(&action.output) else {
+                    bail!("action '{}': unknown output '{}'", name, action.output);
                 };
-                if !target.kind.accepts(&action.command) {
+                if !output.kind.accepts(&action.command) {
                     bail!(
-                        "action '{}': target '{}' is {} but action has {}",
+                        "action '{}': output '{}' is {} but action has {}",
                         name,
-                        action.target,
-                        target.kind.type_name(),
+                        action.output,
+                        output.kind.type_name(),
                         action.command.shape()
                     );
                 }
@@ -370,8 +454,9 @@ pub fn load_config() -> Result<Config> {
 
 /// Parse and validate config text. A reload uses this through `load_config`.
 pub fn parse_config(contents: &str) -> Result<Config> {
-    let cfg: Config = toml::from_str(contents)
+    let mut cfg: Config = toml::from_str(contents)
         .context("Failed to parse config file as TOML")?;
+    cfg.migrate_legacy_inputs()?;
     cfg.validate()?;
     Ok(cfg)
 }
@@ -385,21 +470,21 @@ mod tests {
     }
 
     const MIXED: &str = r#"
-        [targets.lights]
+        [outputs.lights]
         type = "osc"
         address = "10.0.0.184:8000"
 
-        [targets.dmx]
+        [outputs.dmx]
         type = "artnet"
         broadcast_address = "10.0.0.255"
         universe = 2
 
-        [targets.pixels]
+        [outputs.pixels]
         type = "sacn"
         broadcast_address = ""
         universe = 3
 
-        [targets.strip]
+        [outputs.strip]
         type = "wled"
         host = "10.0.0.20"
         boost_playlist = "BOOST"
@@ -408,19 +493,19 @@ mod tests {
         force = false
 
         [actions.cue1]
-        target = "lights"
+        output = "lights"
         path = "/gma3/cmd"
         arg_value = "Goto Sequence 54 Cue 1"
 
         [[actions.big_hit]]
-        target = "dmx"
+        output = "dmx"
         channel = 1
         value = 255
         [[actions.big_hit]]
-        target = "strip"
+        output = "strip"
         preset = "BOOST-Fire"
         [[actions.big_hit]]
-        target = "pixels"
+        output = "pixels"
         channel = 10
         value = 128
         universe = 4
@@ -433,10 +518,10 @@ mod tests {
     "#;
 
     #[test]
-    fn resolves_single_and_scene_actions_across_target_types() {
+    fn resolves_single_and_scene_actions_across_output_types() {
         let cfg = parse(MIXED);
         cfg.validate().unwrap();
-        assert!(cfg.targets["lights"].enabled);
+        assert!(cfg.outputs["lights"].enabled);
 
         let toggle = &cfg.toggles.as_ref().unwrap()[0];
         assert_eq!(toggle.revert_after, Some(30));
@@ -457,12 +542,12 @@ mod tests {
     #[test]
     fn osc_action_accepts_a_second_argument() {
         let cfg = parse(r#"
-            [targets.camera]
+            [outputs.camera]
             type = "osc"
             address = "10.0.0.244:7000"
 
             [actions.scene2]
-            target = "camera"
+            output = "camera"
             path = "/scene/switchByIndex"
             arg_value = 2
             arg_value2 = 1
@@ -477,22 +562,22 @@ mod tests {
     }
 
     #[test]
-    fn obs_target_and_action_parse() {
+    fn obs_output_and_action_parse() {
         let cfg = parse(r#"
-            [targets.obs]
+            [outputs.obs]
             type = "obs"
             host = "127.0.0.1"
             port = 4455
             password = "secret"
 
             [actions.obs_cam2]
-            target = "obs"
+            output = "obs"
             scene = "Camera 2"
         "#);
         cfg.validate().unwrap();
         assert!(matches!(
-            &cfg.targets["obs"].kind,
-            Target::Obs(obs)
+            &cfg.outputs["obs"].kind,
+            Output::Obs(obs)
                 if obs.host == "127.0.0.1"
                     && obs.port == Some(4455)
                     && obs.password.as_deref() == Some("secret")
@@ -504,35 +589,35 @@ mod tests {
     #[test]
     fn obs_port_and_password_are_optional() {
         let cfg = parse(r#"
-            [targets.obs]
+            [outputs.obs]
             type = "obs"
             host = "127.0.0.1"
 
             [actions.obs_cam2]
-            target = "obs"
+            output = "obs"
             scene = "Camera 2"
         "#);
         cfg.validate().unwrap();
         assert!(matches!(
-            &cfg.targets["obs"].kind,
-            Target::Obs(obs) if obs.port.is_none() && obs.password.is_none()
+            &cfg.outputs["obs"].kind,
+            Output::Obs(obs) if obs.port.is_none() && obs.password.is_none()
         ));
     }
 
     #[test]
     fn obs_mute_action_parses_set_and_toggle() {
         let cfg = parse(r#"
-            [targets.obs]
+            [outputs.obs]
             type = "obs"
             host = "127.0.0.1"
 
             [actions.mic_off]
-            target = "obs"
+            output = "obs"
             input = "Mic/Aux"
             muted = true
 
             [actions.mic_toggle]
-            target = "obs"
+            output = "obs"
             input = "Desktop Audio"
         "#);
         cfg.validate().unwrap();
@@ -549,9 +634,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_obs_mute_on_wled_target() {
+    fn rejects_obs_mute_on_wled_output() {
         let cfg = parse(r#"
-            [targets.strip]
+            [outputs.strip]
             type = "wled"
             host = "10.0.0.20"
             boost_playlist = "BOOST"
@@ -560,18 +645,18 @@ mod tests {
             force = false
 
             [actions.mic]
-            target = "strip"
+            output = "strip"
             input = "Mic/Aux"
             muted = false
         "#);
         let err = cfg.validate().unwrap_err().to_string();
-        assert_eq!(err, "action 'mic': target 'strip' is wled but action has input/muted");
+        assert_eq!(err, "action 'mic': output 'strip' is wled but action has input/muted");
     }
 
     #[test]
-    fn rejects_obs_scene_on_wled_target() {
+    fn rejects_obs_scene_on_wled_output() {
         let cfg = parse(r#"
-            [targets.strip]
+            [outputs.strip]
             type = "wled"
             host = "10.0.0.20"
             boost_playlist = "BOOST"
@@ -580,11 +665,11 @@ mod tests {
             force = false
 
             [actions.cam]
-            target = "strip"
+            output = "strip"
             scene = "Camera 2"
         "#);
         let err = cfg.validate().unwrap_err().to_string();
-        assert_eq!(err, "action 'cam': target 'strip' is wled but action has scene");
+        assert_eq!(err, "action 'cam': output 'strip' is wled but action has scene");
     }
 
     #[test]
@@ -605,11 +690,11 @@ mod tests {
             url = "wss://example.com/api/live/ws"
 
             [actions.dj_look]
-            target = "lights"
+            output = "lights"
             path = "/gma3/cmd"
             arg_value = "Goto Sequence 54 Cue 3"
 
-            [targets.lights]
+            [outputs.lights]
             type = "osc"
             address = "10.0.0.184:8000"
 
@@ -669,9 +754,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_command_that_does_not_match_target_type() {
+    fn rejects_command_that_does_not_match_output_type() {
         let cfg = parse(r#"
-            [targets.strip]
+            [outputs.strip]
             type = "wled"
             host = "10.0.0.20"
             boost_playlist = "BOOST"
@@ -680,31 +765,133 @@ mod tests {
             force = false
 
             [actions.rainbow]
-            target = "strip"
+            output = "strip"
             path = "/gma3/cmd"
             arg_value = "nope"
         "#);
         let err = cfg.validate().unwrap_err().to_string();
-        assert_eq!(err, "action 'rainbow': target 'strip' is wled but action has path/arg_value");
+        assert_eq!(err, "action 'rainbow': output 'strip' is wled but action has path/arg_value");
     }
 
     #[test]
-    fn rejects_unknown_target() {
+    fn rejects_unknown_output() {
         let cfg = parse(r#"
             [actions.rainbow]
-            target = "strip"
+            output = "strip"
             preset = "BOOST-Rainbow"
         "#);
         let err = cfg.validate().unwrap_err().to_string();
-        assert_eq!(err, "action 'rainbow': unknown target 'strip'");
+        assert_eq!(err, "action 'rainbow': unknown output 'strip'");
+    }
+
+    #[test]
+    fn multiple_inputs_of_the_same_type_parse() {
+        let cfg = parse_config(r#"
+            [inputs.show_nwc]
+            type = "nwc"
+            uri = "nostr+walletconnect://show"
+
+            [inputs.guest_nwc]
+            type = "nwc"
+            enabled = false
+            uri = "nostr+walletconnect://guest"
+
+            [inputs.board]
+            type = "boostboard"
+            relay_addrs = ["wss://relay.damus.io"]
+            pubkey = "aa"
+
+            [inputs.other_board]
+            type = "boostboard"
+            relay_addrs = ["wss://nos.lol"]
+            pubkey = "bb"
+        "#).unwrap();
+
+        assert!(matches!(
+            &cfg.inputs["show_nwc"].kind,
+            Input::Nwc(nwc) if nwc.uri == "nostr+walletconnect://show"
+        ));
+        assert!(!cfg.inputs["guest_nwc"].enabled);
+        assert!(matches!(&cfg.inputs["board"].kind, Input::Boostboard(board) if board.pubkey == "aa"));
+        assert!(matches!(&cfg.inputs["other_board"].kind, Input::Boostboard(board) if board.pubkey == "bb"));
+        assert!(cfg.inputs.values().filter(|input| input.kind.type_name() == "nwc").count() == 2);
+    }
+
+    #[test]
+    fn legacy_singleton_sections_migrate_into_inputs() {
+        let cfg = parse_config(r#"
+            [nwc]
+            uri = "nostr+walletconnect://show"
+
+            [splitkit]
+            url = "wss://example.com/api/live/ws"
+        "#).unwrap();
+
+        assert!(cfg.nwc.is_none());
+        assert!(cfg.splitkit.is_none());
+        assert!(cfg.inputs["nwc"].enabled);
+        assert!(matches!(
+            &cfg.inputs["nwc"].kind,
+            Input::Nwc(nwc) if nwc.uri == "nostr+walletconnect://show"
+        ));
+        assert!(matches!(
+            &cfg.inputs["splitkit"].kind,
+            Input::Splitkit(splitkit) if splitkit.url == "wss://example.com/api/live/ws"
+        ));
+    }
+
+    #[test]
+    fn rejects_legacy_section_that_duplicates_a_named_input() {
+        let err = parse_config(r#"
+            [nwc]
+            uri = "nostr+walletconnect://old"
+
+            [inputs.nwc]
+            type = "nwc"
+            uri = "nostr+walletconnect://new"
+        "#).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("input 'nwc' is defined both as [nwc] and [inputs.nwc]"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_input_name_that_matches_an_output() {
+        let err = parse_config(r#"
+            [inputs.lights]
+            type = "nwc"
+            uri = "nostr+walletconnect://show"
+
+            [outputs.lights]
+            type = "osc"
+            address = "10.0.0.184:8000"
+        "#).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("input 'lights' uses the same name as an output"), "{msg}");
+    }
+
+    #[test]
+    fn rejects_reserved_input_name() {
+        let err = parse_config(r#"
+            [inputs.Effects]
+            type = "zaps"
+            relay_addrs = ["wss://relay.damus.io"]
+            naddr = "naddr1example"
+        "#).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("input name 'Effects' is reserved"), "{msg}");
     }
 
     #[test]
     fn project_config_still_parses() {
         let cfg = load_config().unwrap();
-        assert!(cfg.targets.contains_key("lights"));
+        assert!(cfg.outputs.contains_key("lights"));
         assert!(cfg.actions.contains_key("cue2"));
-        assert!(cfg.actions.contains_key("boost"));
+        assert!(cfg.inputs.contains_key("nwc"));
+        assert!(cfg.inputs.contains_key("boostboard"));
+        assert!(cfg.inputs.contains_key("zaps"));
     }
 
     #[test]
@@ -723,7 +910,9 @@ mod tests {
         assert_eq!(cfg.nwc, again.nwc);
         assert_eq!(cfg.boostboard, again.boostboard);
         assert_eq!(cfg.zaps, again.zaps);
-        assert_eq!(cfg.targets.len(), again.targets.len());
+        assert_eq!(cfg.splitkit, again.splitkit);
+        assert_eq!(cfg.inputs, again.inputs);
+        assert_eq!(cfg.outputs.len(), again.outputs.len());
         assert_eq!(cfg.actions.len(), again.actions.len());
     }
 
@@ -737,7 +926,7 @@ mod tests {
     #[test]
     fn invalid_config_keeps_the_previous_one() {
         let previous = parse_config(&fs::read_to_string("./config.toml").unwrap()).unwrap();
-        assert!(parse_config("targets = 1").is_err());
-        assert!(previous.targets.contains_key("lights"));
+        assert!(parse_config("outputs = 1").is_err());
+        assert!(previous.outputs.contains_key("lights"));
     }
 }

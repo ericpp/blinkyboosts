@@ -1,4 +1,4 @@
-use crate::config::{Config, BoostBoard, NWC, SplitKit, Target, Zaps, BoostFiltersConfig};
+use crate::config::{Config, Input, Output};
 use eframe::egui;
 use egui::{Color32, RichText, Ui, ViewportBuilder};
 use std::sync::{Arc, Mutex};
@@ -161,62 +161,20 @@ impl BlinkyBoostsApp {
         }
     }
 
-    fn toggle_component(&mut self, name: &str, enabled: bool) {
-        let cfg = &mut self.modified_config;
+    fn toggle_input(&mut self, name: &str) {
+        let Some(input) = self.modified_config.inputs.get_mut(name) else { return };
+        input.enabled = !input.enabled;
+        let enabled = input.enabled;
 
-        // Get the current config value or create defaults
-        let orig_cfg = &self.config;
-
-        match name {
-            "NWC" => {
-                if enabled {
-                    cfg.nwc = None;
-                } else {
-                    cfg.nwc = Some(orig_cfg.nwc.clone().unwrap_or_else(||
-                        NWC { uri: "".into(), filters: BoostFiltersConfig::default() }
-                    ));
-                }
-            },
-            "Boostboard" => {
-                if enabled {
-                    cfg.boostboard = None;
-                } else {
-                    cfg.boostboard = Some(orig_cfg.boostboard.clone().unwrap_or_else(||
-                        BoostBoard { relay_addrs: vec![], pubkey: "".into(), filters: BoostFiltersConfig::default() }
-                    ));
-                }
-            },
-            "Zaps" => {
-                if enabled {
-                    cfg.zaps = None;
-                } else {
-                    cfg.zaps = Some(orig_cfg.zaps.clone().unwrap_or_else(||
-                        Zaps { relay_addrs: vec![], naddr: String::new(), load_since: None }
-                    ));
-                }
-            },
-            "SplitKit" => {
-                if enabled {
-                    cfg.splitkit = None;
-                } else {
-                    cfg.splitkit = Some(orig_cfg.splitkit.clone().unwrap_or_else(||
-                        SplitKit { url: String::new() }
-                    ));
-                }
-            },
-            _ => return,
-        }
-
-        // Send start/stop message to control the listener
         if enabled {
-            let _ = self.tx.try_send(GuiMessage::StopListener(name.to_string()));
-        } else {
             let _ = self.tx.try_send(GuiMessage::StartListener(name.to_string()));
+        } else {
+            let _ = self.tx.try_send(GuiMessage::StopListener(name.to_string()));
         }
 
         self.statuses.insert(
             name.to_string(),
-            if enabled { ComponentStatus::Disabled } else { ComponentStatus::Enabled }
+            if enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
         );
         self.show_save_dialog = true;
     }
@@ -237,8 +195,9 @@ impl BlinkyBoostsApp {
             self.statuses.insert(name, status);
         }
         self.statuses.retain(|name, _| {
-            matches!(name.as_str(), "NWC" | "Boostboard" | "Zaps" | "SplitKit" | "Effects")
-                || config.targets.contains_key(name)
+            name == "Effects"
+                || config.inputs.contains_key(name)
+                || config.outputs.contains_key(name)
         });
         self.action_status.retain(|name, _| config.actions.contains_key(name));
         if self.selected_action.as_ref().is_some_and(|name| !config.actions.contains_key(name)) {
@@ -248,23 +207,30 @@ impl BlinkyBoostsApp {
         self.modified_config = config;
     }
 
-    fn render_component(&mut self, ui: &mut Ui, name: &str) {
-        let status = self.statuses.get(name).cloned().unwrap_or(ComponentStatus::Disabled);
-        let enabled = status != ComponentStatus::Disabled;
+    fn render_input(&mut self, ui: &mut Ui, name: &str) {
+        let (enabled, label) = match self.modified_config.inputs.get(name) {
+            Some(input) => (input.enabled, input.kind.label()),
+            None => return,
+        };
+        let status = if enabled {
+            self.statuses.get(name).cloned().unwrap_or(ComponentStatus::Enabled)
+        } else {
+            ComponentStatus::Disabled
+        };
 
         ui.horizontal(|ui| {
             ui.set_height(20.0);
-            ui.label(name);
+            ui.label(format!("{name} ({label})"));
             ui.label(RichText::new(status.text()).color(status.color()));
 
             let btn_text = if enabled { "Disable" } else { "Enable" };
             if ui.add_sized([80.0, 20.0], egui::Button::new(btn_text)).clicked() {
-                self.toggle_component(name, enabled);
+                self.toggle_input(name);
             }
 
             if ui.add_sized([30.0, 20.0], egui::Button::new("⚙")).clicked() {
                 if !enabled {
-                    self.toggle_component(name, false);
+                    self.toggle_input(name);
                 }
                 let expanded = self.expanded.entry(name.to_string()).or_insert(false);
                 *expanded = !*expanded;
@@ -272,102 +238,94 @@ impl BlinkyBoostsApp {
         });
 
         if *self.expanded.get(name).unwrap_or(&false) {
-            ui.indent(name, |ui| self.render_settings(ui, name));
+            ui.indent(name, |ui| self.render_input_settings(ui, name));
         }
     }
 
-    fn render_settings(&mut self, ui: &mut Ui, name: &str) {
+    fn render_input_settings(&mut self, ui: &mut Ui, name: &str) {
         let changed = &mut self.show_save_dialog;
+        let Some(input) = self.modified_config.inputs.get_mut(name) else { return };
 
-        match name {
-            "NWC" => {
-                if let Some(nwc) = &mut self.modified_config.nwc {
+        match &mut input.kind {
+            Input::Nwc(nwc) => {
+                ui.horizontal(|ui| {
+                    ui.label("URI:");
+                    if ui.text_edit_singleline(&mut nwc.uri).changed() {
+                        *changed = true;
+                    }
+                });
+            }
+            Input::Boostboard(bb) => {
+                ui.horizontal(|ui| {
+                    ui.label("Pubkey:");
+                    if ui.text_edit_singleline(&mut bb.pubkey).changed() {
+                        *changed = true;
+                    }
+                });
+                ui.label("Relays:");
+                let mut remove_idx = None;
+                for (i, addr) in bb.relay_addrs.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        ui.label("URI:");
-                        if ui.text_edit_singleline(&mut nwc.uri).changed() {
+                        if ui.text_edit_singleline(addr).changed() {
                             *changed = true;
+                        }
+                        if ui.button("✖").clicked() {
+                            remove_idx = Some(i);
                         }
                     });
                 }
-            }
-            "Boostboard" => {
-                if let Some(bb) = &mut self.modified_config.boostboard {
-                    ui.horizontal(|ui| {
-                        ui.label("Pubkey:");
-                        if ui.text_edit_singleline(&mut bb.pubkey).changed() {
-                            *changed = true;
-                        }
-                    });
-                    ui.label("Relays:");
-                    let mut remove_idx = None;
-                    for (i, addr) in bb.relay_addrs.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.text_edit_singleline(addr).changed() {
-                                *changed = true;
-                            }
-                            if ui.button("✖").clicked() {
-                                remove_idx = Some(i);
-                            }
-                        });
-                    }
-                    if let Some(i) = remove_idx {
-                        bb.relay_addrs.remove(i);
-                        *changed = true;
-                    }
-                    if ui.button("+ Add").clicked() {
-                        bb.relay_addrs.push("".into());
-                        *changed = true;
-                    }
+                if let Some(i) = remove_idx {
+                    bb.relay_addrs.remove(i);
+                    *changed = true;
+                }
+                if ui.button("+ Add").clicked() {
+                    bb.relay_addrs.push("".into());
+                    *changed = true;
                 }
             }
-            "Zaps" => {
-                if let Some(zaps) = &mut self.modified_config.zaps {
+            Input::Zaps(zaps) => {
+                ui.horizontal(|ui| {
+                    ui.label("NADDR:");
+                    if ui.text_edit_singleline(&mut zaps.naddr).changed() {
+                        *changed = true;
+                    }
+                });
+                ui.label("Relays:");
+                let mut remove_idx = None;
+                for (i, addr) in zaps.relay_addrs.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        ui.label("NADDR:");
-                        if ui.text_edit_singleline(&mut zaps.naddr).changed() {
+                        if ui.text_edit_singleline(addr).changed() {
                             *changed = true;
                         }
-                    });
-                    ui.label("Relays:");
-                    let mut remove_idx = None;
-                    for (i, addr) in zaps.relay_addrs.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.text_edit_singleline(addr).changed() {
-                                *changed = true;
-                            }
-                            if ui.button("✖").clicked() {
-                                remove_idx = Some(i);
-                            }
-                        });
-                    }
-                    if let Some(i) = remove_idx {
-                        zaps.relay_addrs.remove(i);
-                        *changed = true;
-                    }
-                    if ui.button("+ Add").clicked() {
-                        zaps.relay_addrs.push("".into());
-                        *changed = true;
-                    }
-                }
-            }
-            "SplitKit" => {
-                if let Some(splitkit) = &mut self.modified_config.splitkit {
-                    ui.horizontal(|ui| {
-                        ui.label("URL:");
-                        if ui.text_edit_singleline(&mut splitkit.url).changed() {
-                            *changed = true;
+                        if ui.button("✖").clicked() {
+                            remove_idx = Some(i);
                         }
                     });
                 }
+                if let Some(i) = remove_idx {
+                    zaps.relay_addrs.remove(i);
+                    *changed = true;
+                }
+                if ui.button("+ Add").clicked() {
+                    zaps.relay_addrs.push("".into());
+                    *changed = true;
+                }
             }
-            _ => {}
+            Input::Splitkit(splitkit) => {
+                ui.horizontal(|ui| {
+                    ui.label("URL:");
+                    if ui.text_edit_singleline(&mut splitkit.url).changed() {
+                        *changed = true;
+                    }
+                });
+            }
         }
     }
 
-    fn toggle_target(&mut self, name: &str) {
-        let Some(target) = self.modified_config.targets.get_mut(name) else { return };
-        target.enabled = !target.enabled;
-        let enabled = target.enabled;
+    fn toggle_output(&mut self, name: &str) {
+        let Some(output) = self.modified_config.outputs.get_mut(name) else { return };
+        output.enabled = !output.enabled;
+        let enabled = output.enabled;
         self.statuses.insert(
             name.to_string(),
             if enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
@@ -375,9 +333,9 @@ impl BlinkyBoostsApp {
         self.show_save_dialog = true;
     }
 
-    fn render_target(&mut self, ui: &mut Ui, name: &str) {
-        let (enabled, label) = match self.modified_config.targets.get(name) {
-            Some(target) => (target.enabled, target.kind.label()),
+    fn render_output(&mut self, ui: &mut Ui, name: &str) {
+        let (enabled, label) = match self.modified_config.outputs.get(name) {
+            Some(output) => (output.enabled, output.kind.label()),
             None => return,
         };
         let status = if enabled {
@@ -393,7 +351,7 @@ impl BlinkyBoostsApp {
 
             let btn_text = if enabled { "Disable" } else { "Enable" };
             if ui.add_sized([80.0, 20.0], egui::Button::new(btn_text)).clicked() {
-                self.toggle_target(name);
+                self.toggle_output(name);
             }
 
             if ui.add_sized([30.0, 20.0], egui::Button::new("⚙")).clicked() {
@@ -403,16 +361,16 @@ impl BlinkyBoostsApp {
         });
 
         if *self.expanded.get(name).unwrap_or(&false) {
-            ui.indent(name, |ui| self.render_target_settings(ui, name));
+            ui.indent(name, |ui| self.render_output_settings(ui, name));
         }
     }
 
-    fn render_target_settings(&mut self, ui: &mut Ui, name: &str) {
+    fn render_output_settings(&mut self, ui: &mut Ui, name: &str) {
         let changed = &mut self.show_save_dialog;
-        let Some(target) = self.modified_config.targets.get_mut(name) else { return };
+        let Some(output) = self.modified_config.outputs.get_mut(name) else { return };
 
-        match &mut target.kind {
-            Target::Osc { address } => {
+        match &mut output.kind {
+            Output::Osc { address } => {
                 ui.horizontal(|ui| {
                     ui.label("Address:");
                     if ui.text_edit_singleline(address).changed() {
@@ -420,7 +378,7 @@ impl BlinkyBoostsApp {
                     }
                 });
             }
-            Target::Artnet(artnet) => {
+            Output::Artnet(artnet) => {
                 ui.horizontal(|ui| {
                     ui.label("Broadcast:");
                     if ui.text_edit_singleline(&mut artnet.broadcast_address).changed() {
@@ -446,7 +404,7 @@ impl BlinkyBoostsApp {
                     }
                 });
             }
-            Target::Sacn(sacn) => {
+            Output::Sacn(sacn) => {
                 ui.horizontal(|ui| {
                     ui.label("Universe:");
                     let mut s = sacn.universe.unwrap_or(1).to_string();
@@ -458,7 +416,7 @@ impl BlinkyBoostsApp {
                     }
                 });
             }
-            Target::Wled(wled) => {
+            Output::Wled(wled) => {
                 ui.horizontal(|ui| {
                     ui.label("Host:");
                     if ui.text_edit_singleline(&mut wled.host).changed() {
@@ -490,7 +448,7 @@ impl BlinkyBoostsApp {
                     }
                 });
             }
-            Target::Obs(obs) => {
+            Output::Obs(obs) => {
                 ui.horizontal(|ui| {
                     ui.label("Host:");
                     if ui.text_edit_singleline(&mut obs.host).changed() {
@@ -528,19 +486,19 @@ impl BlinkyBoostsApp {
             .actions
             .iter()
             .map(|(name, group)| {
-                let mut targets = Vec::new();
+                let mut outputs = Vec::new();
                 for action in group.as_slice() {
-                    if targets.iter().any(|(target, _)| target == &action.target) {
+                    if outputs.iter().any(|(output, _)| output == &action.output) {
                         continue;
                     }
                     let enabled = self
                         .config
-                        .targets
-                        .get(&action.target)
-                        .is_some_and(|target| target.enabled);
-                    targets.push((action.target.clone(), enabled));
+                        .outputs
+                        .get(&action.output)
+                        .is_some_and(|output| output.enabled);
+                    outputs.push((action.output.clone(), enabled));
                 }
-                (name.clone(), targets)
+                (name.clone(), outputs)
             })
             .collect();
 
@@ -567,10 +525,10 @@ impl BlinkyBoostsApp {
                 .width(240.0)
                 .height(240.0)
                 .show_ui(ui, |ui| {
-                    for (name, targets) in &rows {
-                        let summary = targets
+                    for (name, outputs) in &rows {
+                        let summary = outputs
                             .iter()
-                            .map(|(target, _)| target.as_str())
+                            .map(|(output, _)| output.as_str())
                             .collect::<Vec<_>>()
                             .join(", ");
                         let label = if summary.is_empty() {
@@ -584,17 +542,17 @@ impl BlinkyBoostsApp {
 
             let selected = self.selected_action.clone();
             if let Some(name) = selected.as_deref() {
-                if let Some((_, targets)) = rows.iter().find(|(n, _)| n == name) {
+                if let Some((_, outputs)) = rows.iter().find(|(n, _)| n == name) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        for (i, (target, enabled)) in targets.iter().enumerate() {
+                        for (i, (output, enabled)) in outputs.iter().enumerate() {
                             if i > 0 {
                                 ui.label(", ");
                             }
                             let text = if *enabled {
-                                RichText::new(target)
+                                RichText::new(output)
                             } else {
-                                RichText::new(target).color(Color32::GRAY)
+                                RichText::new(output).color(Color32::GRAY)
                             };
                             ui.label(text);
                         }
@@ -671,18 +629,23 @@ impl eframe::App for BlinkyBoostsApp {
             ui.columns(2, |cols| {
                 cols[0].heading("Inputs");
                 cols[0].separator();
-                for name in ["NWC", "Boostboard", "Zaps", "SplitKit"] {
-                    self.render_component(&mut cols[0], name);
+                let names: Vec<String> = self.modified_config.inputs.keys().cloned().collect();
+                if names.is_empty() {
+                    cols[0].label("No inputs configured");
+                } else {
+                    for name in names {
+                        self.render_input(&mut cols[0], &name);
+                    }
                 }
 
                 cols[1].heading("Outputs");
                 cols[1].separator();
-                let names: Vec<String> = self.modified_config.targets.keys().cloned().collect();
+                let names: Vec<String> = self.modified_config.outputs.keys().cloned().collect();
                 if names.is_empty() {
-                    cols[1].label("No targets configured");
+                    cols[1].label("No outputs configured");
                 } else {
                     for name in names {
-                        self.render_target(&mut cols[1], &name);
+                        self.render_output(&mut cols[1], &name);
                     }
                 }
             });
@@ -750,21 +713,16 @@ impl eframe::App for BlinkyBoostsApp {
 
 fn component_statuses(config: &Config) -> std::collections::HashMap<String, ComponentStatus> {
     let mut statuses = std::collections::HashMap::new();
-    for (name, enabled) in [
-        ("NWC", config.nwc.is_some()),
-        ("Boostboard", config.boostboard.is_some()),
-        ("Zaps", config.zaps.is_some()),
-        ("SplitKit", config.splitkit.is_some()),
-    ] {
-        statuses.insert(
-            name.to_string(),
-            if enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
-        );
-    }
-    for (name, target) in &config.targets {
+    for (name, input) in &config.inputs {
         statuses.insert(
             name.clone(),
-            if target.enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
+            if input.enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
+        );
+    }
+    for (name, output) in &config.outputs {
+        statuses.insert(
+            name.clone(),
+            if output.enabled { ComponentStatus::Enabled } else { ComponentStatus::Disabled },
         );
     }
     statuses
@@ -777,15 +735,7 @@ pub fn run_gui(tx: mpsc::Sender<GuiMessage>, rx: mpsc::Receiver<GuiMessage>)
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("Error loading config: {}", e);
-            Config {
-                nwc: None,
-                boostboard: None,
-                zaps: None,
-                splitkit: None,
-                targets: std::collections::BTreeMap::new(),
-                actions: std::collections::BTreeMap::new(),
-                toggles: None,
-            }
+            Config::default()
         }
     };
 

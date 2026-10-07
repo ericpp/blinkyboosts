@@ -52,14 +52,14 @@ fn parse_load_since(load_since_str: Option<&String>, default: Timestamp) -> Time
 // ============================================================================
 
 async fn setup_effects(config: config::Config) -> Result<()> {
-    for (name, target) in &config.targets {
-        let config::Target::Wled(cfg) = &target.kind else { continue };
-        if !target.enabled || !cfg.setup { continue };
+    for (name, output) in &config.outputs {
+        let config::Output::Wled(cfg) = &output.kind else { continue };
+        if !output.enabled || !cfg.setup { continue };
 
-        println!("Setting up WLED target '{}'", name);
+        println!("Setting up WLED output '{}'", name);
         let mut wled = wled::WLed::new();
         wled.load(&cfg.host).await
-            .with_context(|| format!("Unable to load WLED target '{}'", name))?;
+            .with_context(|| format!("Unable to load WLED output '{}'", name))?;
 
         if let Some(presets) = &cfg.presets {
             for (idx, preset) in presets.iter().enumerate() {
@@ -335,17 +335,18 @@ async fn handle_connection_error(component: &str, error: anyhow::Error, tx: &tok
 }
 
 async fn listen_for_zaps(
+    name: String,
     cfg: config::Zaps,
     config: SharedConfig,
     tx: tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: Arc<Mutex<sat_tracker::SatTracker>>,
     cancel_token: CancellationToken
 ) {
-    initialize_listener("Zaps", &tx).await;
+    initialize_listener(&name, &tx).await;
 
     let zap = match zaps::Zaps::new(&cfg.relay_addrs, &cfg.naddr).await {
         Ok(z) => z,
-        Err(e) => return handle_connection_error("Zaps", e, &tx).await,
+        Err(e) => return handle_connection_error(&name, e, &tx).await,
     };
 
     let load_since = match cfg.load_since {
@@ -356,41 +357,44 @@ async fn listen_for_zaps(
         None => None,
     };
 
-    println!("Waiting for Zaps...");
+    println!("Waiting for {name}...");
 
+    let callback_name = name.clone();
+    let error_name = name.clone();
     tokio::select! {
         result = zap.subscribe_zaps(load_since, |zap: zaps::Zap| {
-            let (config, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            let (config, tx, tracker, name) = (config.clone(), tx.clone(), tracker.clone(), callback_name.clone());
             async move {
                 println!("Zap: {:#?}", zap);
-                process_boost("Zaps", zap.value_msat_total / 1000, &tx, &tracker, &config, !zap.is_old).await;
+                process_boost(&name, zap.value_msat_total / 1000, &tx, &tracker, &config, !zap.is_old).await;
             }
         }) => {
             if let Err(e) = result {
                 let error_msg = format!("Event error: {:#}", e);
-                eprintln!("Error handling zap events: {}", error_msg);
-                let _ = tx.send(GuiMessage::UpdateStatus("Zaps".to_string(), ComponentStatus::Error(error_msg))).await;
+                eprintln!("Error handling {error_name} events: {error_msg}");
+                let _ = tx.send(GuiMessage::UpdateStatus(error_name, ComponentStatus::Error(error_msg))).await;
             }
         }
         _ = cancel_token.cancelled() => {
-            println!("Zaps listener cancelled");
-            let _ = tx.send(GuiMessage::UpdateStatus("Zaps".to_string(), ComponentStatus::Disabled)).await;
+            println!("{name} listener cancelled");
+            let _ = tx.send(GuiMessage::UpdateStatus(name, ComponentStatus::Disabled)).await;
         }
     }
 }
 
 async fn listen_for_boostboard(
+    name: String,
     cfg: config::BoostBoard,
     config: SharedConfig,
     tx: tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: Arc<Mutex<sat_tracker::SatTracker>>,
     cancel_token: CancellationToken
 ) {
-    initialize_listener("Boostboard", &tx).await;
+    initialize_listener(&name, &tx).await;
 
     if cfg.relay_addrs.is_empty() {
-        eprintln!("Error: No relay addresses specified for boostboard");
-        let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Error("No relay addresses specified".to_string()))).await;
+        eprintln!("Error: No relay addresses specified for {name}");
+        let _ = tx.send(GuiMessage::UpdateStatus(name, ComponentStatus::Error("No relay addresses specified".to_string()))).await;
         return;
     }
 
@@ -402,11 +406,11 @@ async fn listen_for_boostboard(
         after: cfg.filters.after.as_ref().and_then(|s| parse_timestamp(s).ok()),
     };
 
-    println!("Boostboard Filters: {:#?}", &filters);
+    println!("{name} Filters: {:#?}", &filters);
 
     let board = match boostboard::BoostBoard::new(&cfg.relay_addrs, &cfg.pubkey, filters.clone()).await {
         Ok(b) => b,
-        Err(e) => return handle_connection_error("Boostboard", e, &tx).await,
+        Err(e) => return handle_connection_error(&name, e, &tx).await,
     };
 
     let load_since = Some(parse_load_since(cfg.filters.load_since.as_ref(), Timestamp::now()));
@@ -414,11 +418,12 @@ async fn listen_for_boostboard(
     // Load stored boosts
     println!("Loading stored boosts from API...");
     let stored_boosts = boostboard::StoredBoosts::new(filters);
+    let load_name = name.clone();
     let _ = stored_boosts.load(|boost: boosts::Boostagram| {
-        let (tx, tracker, config) = (tx.clone(), tracker.clone(), config.clone());
+        let (tx, tracker, config, name) = (tx.clone(), tracker.clone(), config.clone(), load_name.clone());
         async move {
             if boost.action == "boost" {
-                process_boost("Boostboard", boost.sats, &tx, &tracker, &config, false).await;
+                process_boost(&name, boost.sats, &tx, &tracker, &config, false).await;
             }
         }
     }).await;
@@ -429,48 +434,51 @@ async fn listen_for_boostboard(
         Ok(id) => id,
         Err(e) => {
             let error_msg = format!("Subscription error: {:#}", e);
-            eprintln!("Error subscribing to board: {}", error_msg);
-            let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Error(error_msg))).await;
+            eprintln!("Error subscribing to {name}: {error_msg}");
+            let _ = tx.send(GuiMessage::UpdateStatus(name, ComponentStatus::Error(error_msg))).await;
             return;
         }
     };
 
-    println!("Waiting for Boostboard boosts...");
+    println!("Waiting for {name} boosts...");
     let subscription_start_time = Timestamp::now();
     let tx_clone = tx.clone();
+    let callback_name = name.clone();
+    let error_name = name.clone();
 
     tokio::select! {
         result = board.handle_boosts(subscription_id, move |boost: boosts::Boostagram, event_ts: Timestamp| {
-            let (config, tx, tracker) = (config.clone(), tx_clone.clone(), tracker.clone());
+            let (config, tx, tracker, name) = (config.clone(), tx_clone.clone(), tracker.clone(), callback_name.clone());
             async move {
                 if boost.action == "boost" {
                     println!("Boost: {:#?}", boost);
                     let trigger = event_ts >= subscription_start_time;
-                    process_boost("Boostboard", boost.sats, &tx, &tracker, &config, trigger).await;
+                    process_boost(&name, boost.sats, &tx, &tracker, &config, trigger).await;
                 }
             }
         }) => {
             if let Err(e) = result {
                 let error_msg = format!("Event error: {:#}", e);
-                eprintln!("Error handling boostboard events: {}", error_msg);
-                let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Error(error_msg))).await;
+                eprintln!("Error handling {error_name} events: {error_msg}");
+                let _ = tx.send(GuiMessage::UpdateStatus(error_name, ComponentStatus::Error(error_msg))).await;
             }
         }
         _ = cancel_token.cancelled() => {
-            println!("Boostboard listener cancelled");
-            let _ = tx.send(GuiMessage::UpdateStatus("Boostboard".to_string(), ComponentStatus::Disabled)).await;
+            println!("{name} listener cancelled");
+            let _ = tx.send(GuiMessage::UpdateStatus(name, ComponentStatus::Disabled)).await;
         }
     }
 }
 
 async fn listen_for_nwc(
+    name: String,
     cfg: config::NWC,
     config: SharedConfig,
     tx: tokio::sync::mpsc::Sender<GuiMessage>,
     tracker: Arc<Mutex<sat_tracker::SatTracker>>,
     cancel_token: CancellationToken
 ) {
-    initialize_listener("NWC", &tx).await;
+    initialize_listener(&name, &tx).await;
 
     let filters = boostboard::BoostFilters {
         podcasts: cfg.filters.podcasts.clone(),
@@ -480,67 +488,73 @@ async fn listen_for_nwc(
         after: cfg.filters.after.as_ref().and_then(|s| parse_timestamp(s).ok()),
     };
 
-    println!("NWC Filters: {:#?}", &filters);
+    println!("{name} Filters: {:#?}", &filters);
 
     let nwc = match nwc::NWC::new(&cfg.uri, filters).await {
         Ok(n) => n,
-        Err(e) => return handle_connection_error("NWC", e, &tx).await,
+        Err(e) => return handle_connection_error(&name, e, &tx).await,
     };
 
     let load_since = parse_load_since(cfg.filters.load_since.as_ref(), Timestamp::now());
 
-    println!("Loading previous boosts from NWC...");
+    println!("Loading previous boosts from {name}...");
+    let load_name = name.clone();
     let latest_boost_timestamp = nwc.load_previous_boosts(Some(load_since), |boost: boosts::Boostagram| {
-        let (tx, tracker, config) = (tx.clone(), tracker.clone(), config.clone());
+        let (tx, tracker, config, name) = (tx.clone(), tracker.clone(), config.clone(), load_name.clone());
         async move {
-            process_boost("NWC", boost.sats, &tx, &tracker, &config, false).await;
+            process_boost(&name, boost.sats, &tx, &tracker, &config, false).await;
         }
     }).await.unwrap_or(None);
 
     sync_threshold_triggers(&snapshot(&config), &tracker).await;
 
     let subscription_start = latest_boost_timestamp.map(|ts| ts + 1).unwrap_or(load_since);
-    println!("Waiting for NWC boosts...");
+    println!("Waiting for {name} boosts...");
 
+    let callback_name = name.clone();
+    let error_name = name.clone();
     tokio::select! {
         result = nwc.subscribe_boosts(subscription_start, |boost: boosts::Boostagram| {
-            let (config, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            let (config, tx, tracker, name) = (config.clone(), tx.clone(), tracker.clone(), callback_name.clone());
             async move {
                 if boost.action == "boost" {
-                    println!("NWC Boost: {:#?}", boost);
-                    process_boost("NWC", boost.sats, &tx, &tracker, &config, true).await;
+                    println!("{name} Boost: {:#?}", boost);
+                    process_boost(&name, boost.sats, &tx, &tracker, &config, true).await;
                 }
             }
         }) => {
             if let Err(e) = result {
                 let error_msg = format!("Event error: {:#}", e);
-                eprintln!("Error handling NWC events: {}", error_msg);
-                let _ = tx.send(GuiMessage::UpdateStatus("NWC".to_string(), ComponentStatus::Error(error_msg))).await;
+                eprintln!("Error handling {error_name} events: {error_msg}");
+                let _ = tx.send(GuiMessage::UpdateStatus(error_name, ComponentStatus::Error(error_msg))).await;
             }
         }
         _ = cancel_token.cancelled() => {
-            println!("NWC listener cancelled");
-            let _ = tx.send(GuiMessage::UpdateStatus("NWC".to_string(), ComponentStatus::Disabled)).await;
+            println!("{name} listener cancelled");
+            let _ = tx.send(GuiMessage::UpdateStatus(name, ComponentStatus::Disabled)).await;
         }
     }
 }
 
 async fn listen_for_splitkit(
+    name: String,
     cfg: config::SplitKit,
     config: SharedConfig,
     tx: tokio::sync::mpsc::Sender<GuiMessage>,
     cancel_token: CancellationToken
 ) {
-    initialize_listener("SplitKit", &tx).await;
+    initialize_listener(&name, &tx).await;
 
     loop {
-        println!("Connecting to SplitKit at {}...", cfg.url);
+        println!("Connecting to {name} at {}...", cfg.url);
+        let callback_name = name.clone();
+        let cancel_name = name.clone();
         let result = tokio::select! {
             result = splitkit::subscribe(&cfg.url, |effect: splitkit::FiredEffect| {
-                let (config, tx) = (config.clone(), tx.clone());
+                let (config, tx, name) = (config.clone(), tx.clone(), callback_name.clone());
                 async move {
                     println!(
-                        "SplitKit effect '{}': {} says \"{}\"",
+                        "{name} effect '{}': {} says \"{}\"",
                         effect.label, effect.sender_name, effect.message
                     );
                     let current = snapshot(&config);
@@ -551,20 +565,20 @@ async fn listen_for_splitkit(
                                 &current,
                                 toggle,
                                 &mut triggered,
-                                &format!("Failed to trigger SplitKit effect '{}'", effect.id),
+                                &format!("Failed to trigger {name} effect '{}'", effect.id),
                             ).await;
                         }
                     }
                     let _ = tx.send(GuiMessage::BoostReceived(
-                        format!("SplitKit: {} ({})", effect.label, effect.sender_name),
+                        format!("{name}: {} ({})", effect.label, effect.sender_name),
                         0,
                         triggered,
                     )).await;
                 }
             }) => result,
             _ = cancel_token.cancelled() => {
-                println!("SplitKit listener cancelled");
-                let _ = tx.send(GuiMessage::UpdateStatus("SplitKit".to_string(), ComponentStatus::Disabled)).await;
+                println!("{cancel_name} listener cancelled");
+                let _ = tx.send(GuiMessage::UpdateStatus(cancel_name, ComponentStatus::Disabled)).await;
                 return;
             }
         };
@@ -576,14 +590,15 @@ async fn listen_for_splitkit(
             }
             Err(e) => (format!("{:#}", e), 5),
         };
-        eprintln!("SplitKit: {}, retrying in {}s", message, wait);
-        let _ = tx.send(GuiMessage::UpdateStatus("SplitKit".to_string(), ComponentStatus::Error(message))).await;
+        eprintln!("{name}: {message}, retrying in {wait}s");
+        let _ = tx.send(GuiMessage::UpdateStatus(name.clone(), ComponentStatus::Error(message))).await;
 
+        let cancel_name = name.clone();
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_secs(wait)) => {}
             _ = cancel_token.cancelled() => {
-                println!("SplitKit listener cancelled");
-                let _ = tx.send(GuiMessage::UpdateStatus("SplitKit".to_string(), ComponentStatus::Disabled)).await;
+                println!("{cancel_name} listener cancelled");
+                let _ = tx.send(GuiMessage::UpdateStatus(cancel_name, ComponentStatus::Disabled)).await;
                 return;
             }
         }
@@ -604,30 +619,32 @@ async fn start_listener(
     stop_listener(name, handles).await;
 
     let current = snapshot(config);
+    let Some(input) = current.inputs.get(name).cloned() else {
+        eprintln!("Cannot start {}: not configured or unknown", name);
+        return;
+    };
+
     let cancel_token = CancellationToken::new();
     let cancel_clone = cancel_token.clone();
+    let listener_name = name.to_string();
 
-    let handle = match name {
-        "Zaps" if current.zaps.is_some() => {
-            let (cfg, shared, tx, tracker) = (current.zaps.unwrap(), config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move { listen_for_zaps(cfg, shared, tx, tracker, cancel_clone).await })
+    let handle = match input.kind {
+        config::Input::Zaps(cfg) => {
+            let (shared, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_zaps(listener_name, cfg, shared, tx, tracker, cancel_clone).await })
         },
-        "Boostboard" if current.boostboard.is_some() => {
-            let (cfg, shared, tx, tracker) = (current.boostboard.unwrap(), config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move { listen_for_boostboard(cfg, shared, tx, tracker, cancel_clone).await })
+        config::Input::Boostboard(cfg) => {
+            let (shared, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_boostboard(listener_name, cfg, shared, tx, tracker, cancel_clone).await })
         },
-        "NWC" if current.nwc.is_some() => {
-            let (cfg, shared, tx, tracker) = (current.nwc.unwrap(), config.clone(), tx.clone(), tracker.clone());
-            tokio::spawn(async move { listen_for_nwc(cfg, shared, tx, tracker, cancel_clone).await })
+        config::Input::Nwc(cfg) => {
+            let (shared, tx, tracker) = (config.clone(), tx.clone(), tracker.clone());
+            tokio::spawn(async move { listen_for_nwc(listener_name, cfg, shared, tx, tracker, cancel_clone).await })
         },
-        "SplitKit" if current.splitkit.is_some() => {
-            let (cfg, shared, tx) = (current.splitkit.unwrap(), config.clone(), tx.clone());
-            tokio::spawn(async move { listen_for_splitkit(cfg, shared, tx, cancel_clone).await })
+        config::Input::Splitkit(cfg) => {
+            let (shared, tx) = (config.clone(), tx.clone());
+            tokio::spawn(async move { listen_for_splitkit(listener_name, cfg, shared, tx, cancel_clone).await })
         },
-        _ => {
-            eprintln!("Cannot start {}: not configured or unknown", name);
-            return;
-        }
     };
 
     handles.lock().await.insert(name.to_string(), (handle, cancel_token));
@@ -641,7 +658,7 @@ enum ListenerChange {
     Stop,
 }
 
-fn listener_change<T: PartialEq>(old: &Option<T>, new: &Option<T>) -> ListenerChange {
+fn listener_change<T: PartialEq>(old: Option<&T>, new: Option<&T>) -> ListenerChange {
     if old == new {
         ListenerChange::Unchanged
     } else if new.is_some() {
@@ -673,12 +690,15 @@ async fn reload_config(
         *guard = new.clone();
     }
 
-    for (name, change) in [
-        ("NWC", listener_change(&old.nwc, &new.nwc)),
-        ("Boostboard", listener_change(&old.boostboard, &new.boostboard)),
-        ("Zaps", listener_change(&old.zaps, &new.zaps)),
-        ("SplitKit", listener_change(&old.splitkit, &new.splitkit)),
-    ] {
+    let mut names: Vec<&str> = old.inputs.keys().chain(new.inputs.keys()).map(|s| s.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+
+    for name in names {
+        let change = listener_change(
+            old.inputs.get(name).filter(|input| input.enabled),
+            new.inputs.get(name).filter(|input| input.enabled),
+        );
         match change {
             ListenerChange::Unchanged => {}
             ListenerChange::Restart => {
@@ -755,17 +775,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (handles, config, tx, tracker) = (listener_handles.clone(), shared.clone(), tx.clone(), sat_tracker.clone());
         async move {
             let cfg = snapshot(&config);
-            if cfg.zaps.is_some() {
-                start_listener("Zaps", &handles, &config, &tx, &tracker).await;
-            }
-            if cfg.boostboard.is_some() {
-                start_listener("Boostboard", &handles, &config, &tx, &tracker).await;
-            }
-            if cfg.nwc.is_some() {
-                start_listener("NWC", &handles, &config, &tx, &tracker).await;
-            }
-            if cfg.splitkit.is_some() {
-                start_listener("SplitKit", &handles, &config, &tx, &tracker).await;
+            let names: Vec<String> = cfg.inputs.iter()
+                .filter(|(_, input)| input.enabled)
+                .map(|(name, _)| name.clone())
+                .collect();
+            for name in names {
+                start_listener(&name, &handles, &config, &tx, &tracker).await;
             }
         }
     });
@@ -825,11 +840,11 @@ mod tests {
     #[test]
     fn reload_restarts_only_changed_inputs() {
         let nwc = config::NWC { uri: "a".into(), filters: Default::default() };
-        assert_eq!(listener_change(&Some(nwc.clone()), &Some(nwc.clone())), ListenerChange::Unchanged);
+        assert_eq!(listener_change(Some(&nwc), Some(&nwc)), ListenerChange::Unchanged);
         let changed = config::NWC { uri: "b".into(), filters: Default::default() };
-        assert_eq!(listener_change(&Some(nwc.clone()), &Some(changed)), ListenerChange::Restart);
-        assert_eq!(listener_change(&Some(nwc), &None), ListenerChange::Stop);
-        assert_eq!(listener_change::<config::NWC>(&None, &None), ListenerChange::Unchanged);
+        assert_eq!(listener_change(Some(&nwc), Some(&changed)), ListenerChange::Restart);
+        assert_eq!(listener_change(Some(&nwc), None), ListenerChange::Stop);
+        assert_eq!(listener_change::<config::NWC>(None, None), ListenerChange::Unchanged);
     }
 
     #[test]
