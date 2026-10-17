@@ -88,17 +88,34 @@ fn format_toggle_description(toggle: &config::Toggle) -> String {
     desc
 }
 
-fn fire_toggle(config: &config::Config, toggle: &config::Toggle, triggered_effects: &mut Vec<String>) -> bool {
-    let revert = match toggle.revert_after {
+fn toggle_revert(toggle: &config::Toggle) -> Option<(u64, Vec<String>)> {
+    match toggle.revert_after {
         Some(secs) if !toggle.revert.is_empty() => Some((secs, toggle.revert.clone())),
         _ => None,
-    };
+    }
+}
+
+/// Queue a job started from the interface and wait for it to finish.
+async fn run_manual(mut job: queue::Job) -> Option<String> {
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    job.done = Some(done_tx);
+    if !queue::enqueue(job) {
+        return Some("action queue stopped".to_string());
+    }
+    match done_rx.await {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(format!("{:#}", e)),
+        Err(_) => Some("action queue stopped".to_string()),
+    }
+}
+
+fn fire_toggle(config: &config::Config, toggle: &config::Toggle, triggered_effects: &mut Vec<String>) -> bool {
     // The worker runs this after anything already queued, and skips it when the
     // same actions are already running or waiting.
     let queued = queue::enqueue(queue::Job {
         config: config.clone(),
         names: toggle.actions.clone(),
-        revert,
+        revert: toggle_revert(toggle),
         replaces_look: true,
         skip_duplicate: true,
         done: None,
@@ -796,25 +813,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Manual action triggered: {}", name);
                         let (current, tx) = (snapshot(&config), gui_tx.clone());
                         tokio::spawn(async move {
-                            let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-                            let queued = queue::enqueue(queue::Job {
+                            let err = run_manual(queue::Job {
                                 config: current,
                                 names: vec![name.clone()],
                                 revert: None,
                                 replaces_look: true,
                                 skip_duplicate: false,
-                                done: Some(done_tx),
-                            });
-                            let err = if queued {
-                                match done_rx.await {
-                                    Ok(Ok(())) => None,
-                                    Ok(Err(e)) => Some(format!("{:#}", e)),
-                                    Err(_) => Some("action queue stopped".to_string()),
-                                }
-                            } else {
-                                Some("action queue stopped".to_string())
-                            };
+                                done: None,
+                            })
+                            .await;
                             let _ = tx.send(GuiMessage::ActionFinished(name, err)).await;
+                        });
+                    },
+                    GuiMessage::RunToggle(index) => {
+                        let current = snapshot(&config);
+                        let toggle = current.toggles.as_ref().and_then(|toggles| toggles.get(index)).cloned();
+                        let tx = gui_tx.clone();
+                        tokio::spawn(async move {
+                            let Some(toggle) = toggle else {
+                                let _ = tx
+                                    .send(GuiMessage::ToggleFinished(
+                                        index,
+                                        Some("toggle no longer exists".to_string()),
+                                    ))
+                                    .await;
+                                return;
+                            };
+                            println!(
+                                "Manual toggle triggered: {}",
+                                actions::describe(&toggle.actions)
+                            );
+                            let revert = toggle_revert(&toggle);
+                            let err = run_manual(queue::Job {
+                                config: current,
+                                names: toggle.actions,
+                                revert,
+                                replaces_look: true,
+                                skip_duplicate: false,
+                                done: None,
+                            })
+                            .await;
+                            let _ = tx.send(GuiMessage::ToggleFinished(index, err)).await;
                         });
                     },
                     GuiMessage::StartListener(name) => {

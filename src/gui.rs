@@ -47,6 +47,10 @@ pub enum GuiMessage {
     RunAction(String),
     /// `None` means the action was sent. `Some` is the error text.
     ActionFinished(String, Option<String>),
+    /// Index into `config.toggles`.
+    RunToggle(usize),
+    /// `None` means the toggle was sent. `Some` is the error text.
+    ToggleFinished(usize, Option<String>),
 }
 
 enum ActionRun {
@@ -71,6 +75,8 @@ pub struct BlinkyBoostsApp {
     sat_total: i64,
     action_status: std::collections::HashMap<String, ActionRun>,
     selected_action: Option<String>,
+    toggle_status: std::collections::HashMap<usize, ActionRun>,
+    selected_toggle: Option<usize>,
 }
 
 impl BlinkyBoostsApp {
@@ -93,6 +99,8 @@ impl BlinkyBoostsApp {
             sat_total: 0,
             action_status: std::collections::HashMap::new(),
             selected_action: None,
+            toggle_status: std::collections::HashMap::new(),
+            selected_toggle: None,
         }
     }
 
@@ -134,17 +142,18 @@ impl BlinkyBoostsApp {
                 GuiMessage::UpdateSatTotal(total) => {
                     self.sat_total = total;
                 }
-                GuiMessage::StartListener(_) | GuiMessage::StopListener(_) | GuiMessage::ReloadConfig | GuiMessage::RunAction(_) => {
+                GuiMessage::StartListener(_)
+                | GuiMessage::StopListener(_)
+                | GuiMessage::ReloadConfig
+                | GuiMessage::RunAction(_)
+                | GuiMessage::RunToggle(_) => {
                     // These are handled by main.rs, not by the GUI
                 }
                 GuiMessage::ActionFinished(name, err) => {
-                    self.action_status.insert(
-                        name,
-                        match err {
-                            None => ActionRun::Ok(Local::now()),
-                            Some(msg) => ActionRun::Failed(msg),
-                        },
-                    );
+                    self.action_status.insert(name, run_result(err));
+                }
+                GuiMessage::ToggleFinished(index, err) => {
+                    self.toggle_status.insert(index, run_result(err));
                 }
                 GuiMessage::ConfigReloaded(cfg) => {
                     self.adopt_config(*cfg);
@@ -202,6 +211,11 @@ impl BlinkyBoostsApp {
         self.action_status.retain(|name, _| config.actions.contains_key(name));
         if self.selected_action.as_ref().is_some_and(|name| !config.actions.contains_key(name)) {
             self.selected_action = None;
+        }
+        let toggle_count = config.toggles.as_ref().map(|toggles| toggles.len()).unwrap_or(0);
+        self.toggle_status.retain(|index, _| *index < toggle_count);
+        if self.selected_toggle.is_some_and(|index| index >= toggle_count) {
+            self.selected_toggle = None;
         }
         self.config = config.clone();
         self.modified_config = config;
@@ -578,22 +592,79 @@ impl BlinkyBoostsApp {
             }
 
             if let Some(name) = selected.as_deref() {
-                match self.action_status.get(name) {
-                    Some(ActionRun::Running) => {
-                        ui.label(RichText::new("Running...").color(Color32::LIGHT_BLUE));
+                render_run_status(ui, self.action_status.get(name));
+            }
+        });
+    }
+
+    fn render_toggles(&mut self, ui: &mut Ui) {
+        let rows: Vec<(usize, String, Vec<(String, bool)>)> = self
+            .config
+            .toggles
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+            .map(|(index, toggle)| {
+                (index, toggle_label(index, toggle), output_states(&self.config, &toggle.actions))
+            })
+            .collect();
+
+        ui.add_space(10.0);
+        ui.heading("Toggles");
+        ui.separator();
+        if rows.is_empty() {
+            ui.label("No toggles configured");
+            return;
+        }
+
+        if self.selected_toggle.is_some_and(|index| index >= rows.len()) {
+            self.selected_toggle = None;
+        }
+
+        ui.horizontal(|ui| {
+            ui.set_height(20.0);
+            let selected_text = self
+                .selected_toggle
+                .and_then(|index| rows.iter().find(|(i, _, _)| *i == index))
+                .map(|(_, label, _)| label.clone())
+                .unwrap_or_else(|| "Select a toggle".to_string());
+            egui::ComboBox::from_id_source("manual_toggle")
+                .selected_text(selected_text)
+                .width(360.0)
+                .height(240.0)
+                .show_ui(ui, |ui| {
+                    for (index, label, _) in &rows {
+                        ui.selectable_value(&mut self.selected_toggle, Some(*index), label);
                     }
-                    Some(ActionRun::Ok(time)) => {
-                        ui.label(
-                            RichText::new(format!("OK {}", time.format("%H:%M:%S")))
-                                .color(Color32::LIGHT_GREEN),
-                        );
-                    }
-                    Some(ActionRun::Failed(err)) => {
-                        ui.label(RichText::new("Failed").color(Color32::RED))
-                            .on_hover_text(err);
-                    }
-                    None => {}
+                });
+
+            let selected = self.selected_toggle;
+            if let Some(index) = selected {
+                if let Some((_, _, outputs)) = rows.iter().find(|(i, _, _)| *i == index) {
+                    render_output_names(ui, outputs);
                 }
+            }
+
+            let running = selected.is_some_and(|index| {
+                matches!(self.toggle_status.get(&index), Some(ActionRun::Running))
+            });
+            if ui
+                .add_enabled(
+                    selected.is_some() && !running,
+                    egui::Button::new("Run").min_size(egui::vec2(80.0, 20.0)),
+                )
+                .clicked()
+            {
+                if let Some(index) = selected {
+                    if self.tx.try_send(GuiMessage::RunToggle(index)).is_ok() {
+                        self.toggle_status.insert(index, ActionRun::Running);
+                    }
+                }
+            }
+
+            if let Some(index) = selected {
+                render_run_status(ui, self.toggle_status.get(&index));
             }
         });
     }
@@ -667,6 +738,7 @@ impl eframe::App for BlinkyBoostsApp {
             });
 
             self.render_actions(ui);
+            self.render_toggles(ui);
 
             ui.add_space(10.0);
             ui.heading("Recent Boosts");
@@ -709,6 +781,96 @@ impl eframe::App for BlinkyBoostsApp {
             }
         });
     }
+}
+
+fn run_result(err: Option<String>) -> ActionRun {
+    match err {
+        None => ActionRun::Ok(Local::now()),
+        Some(msg) => ActionRun::Failed(msg),
+    }
+}
+
+fn render_run_status(ui: &mut Ui, status: Option<&ActionRun>) {
+    match status {
+        Some(ActionRun::Running) => {
+            ui.label(RichText::new("Running...").color(Color32::LIGHT_BLUE));
+        }
+        Some(ActionRun::Ok(time)) => {
+            ui.label(
+                RichText::new(format!("OK {}", time.format("%H:%M:%S")))
+                    .color(Color32::LIGHT_GREEN),
+            );
+        }
+        Some(ActionRun::Failed(err)) => {
+            ui.label(RichText::new("Failed").color(Color32::RED)).on_hover_text(err);
+        }
+        None => {}
+    }
+}
+
+fn render_output_names(ui: &mut Ui, outputs: &[(String, bool)]) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for (i, (output, enabled)) in outputs.iter().enumerate() {
+            if i > 0 {
+                ui.label(", ");
+            }
+            let text = if *enabled {
+                RichText::new(output)
+            } else {
+                RichText::new(output).color(Color32::GRAY)
+            };
+            ui.label(text);
+        }
+    });
+}
+
+fn output_states(config: &Config, names: &[String]) -> Vec<(String, bool)> {
+    let mut outputs = Vec::new();
+    for (_, action) in config.resolve(names) {
+        if outputs.iter().any(|(output, _)| output == &action.output) {
+            continue;
+        }
+        let enabled = config
+            .outputs
+            .get(&action.output)
+            .is_some_and(|output| output.enabled);
+        outputs.push((action.output.clone(), enabled));
+    }
+    outputs
+}
+
+fn toggle_label(index: usize, toggle: &crate::config::Toggle) -> String {
+    let trigger = if let Some(effect) = &toggle.effect {
+        format!("effect {effect}")
+    } else if toggle.threshold > 0 {
+        format!("threshold {}", toggle.threshold)
+    } else if toggle.amount > 0 {
+        format!("amount {}", toggle.amount)
+    } else if let Some(suffix) = toggle.ends_with {
+        format!("ends with {suffix}")
+    } else if toggle.is_default {
+        "default".to_string()
+    } else {
+        "toggle".to_string()
+    };
+
+    let actions = if toggle.actions.is_empty() {
+        "no actions".to_string()
+    } else {
+        toggle.actions.join(", ")
+    };
+
+    let mut label = format!("#{} {trigger}: {actions}", index + 1);
+    if let Some((start, end)) = toggle.endswith_range {
+        label.push_str(&format!(" [{start:02}-{end:02}]"));
+    }
+    if let Some(secs) = toggle.revert_after {
+        if !toggle.revert.is_empty() {
+            label.push_str(&format!(" (reverts in {secs}s)"));
+        }
+    }
+    label
 }
 
 fn component_statuses(config: &Config) -> std::collections::HashMap<String, ComponentStatus> {
