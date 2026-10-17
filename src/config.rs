@@ -111,7 +111,7 @@ impl Input {
 }
 
 /// Effect ids the SplitKit live socket broadcasts, in catalog order.
-pub const SPLITKIT_EFFECTS: &[&str] = &["wide", "dj", "festoons", "bubbles", "mystery"];
+// pub const SPLITKIT_EFFECTS: &[&str] = &["wide", "dj", "festoons", "bubbles", "mystery"];
 
 /// A named destination plus whether the GUI has it switched on.
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -454,14 +454,14 @@ impl Config {
                         index + 1
                     );
                 }
-                if !SPLITKIT_EFFECTS.contains(&effect.as_str()) {
-                    bail!(
-                        "toggle #{}: unknown effect '{}' (expected one of {})",
-                        index + 1,
-                        effect,
-                        SPLITKIT_EFFECTS.join(", ")
-                    );
-                }
+                // if !SPLITKIT_EFFECTS.contains(&effect.as_str()) {
+                //     bail!(
+                //         "toggle #{}: unknown effect '{}' (expected one of {})",
+                //         index + 1,
+                //         effect,
+                //         SPLITKIT_EFFECTS.join(", ")
+                //     );
+                // }
             }
             for name in toggle.actions.iter().chain(toggle.revert.iter()) {
                 if !self.actions.contains_key(name) {
