@@ -37,7 +37,8 @@ type = "sacn"
 broadcast_address = ""
 universe = 1
 
-# OBS over obs-websocket v5. Switches the program scene, or mutes an audio input.
+# OBS over obs-websocket v5. Switches the program scene, mutes an audio input,
+# or shows and hides a source.
 # [outputs.obs]
 # type = "obs"
 # host = "127.0.0.1"
@@ -498,6 +499,13 @@ preset = "BOOST-0"
 # output = "obs"
 # input = "Mic/Aux"
 # muted = true
+#
+# visible = true shows a source, false hides it, and omitting it toggles.
+# Omit scene to use the current program scene. Sources inside a group are found too.
+# [actions.logo_toggle]
+# output = "obs"
+# scene = "Scene 1"
+# source = "Logo"
 
 # One name covering lights and a strip together.
 # hold_ms waits after that step before the next one. The last step's hold

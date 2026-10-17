@@ -1,7 +1,7 @@
+use anyhow::{bail, Context, Result};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use anyhow::{Context, Result, bail};
 use toml;
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
@@ -59,7 +59,7 @@ pub struct NWC {
 pub struct Zaps {
     pub relay_addrs: Vec<String>,
     pub naddr: String,
-    pub load_since: Option<String>,  // Load zaps since this timestamp (e.g., "2025-01-11 00:00:00")
+    pub load_since: Option<String>, // Load zaps since this timestamp (e.g., "2025-01-11 00:00:00")
 }
 
 /// A SplitKit live socket. Fired effects arrive as broadcasts on `url`.
@@ -164,7 +164,10 @@ impl Output {
                 | (Output::Artnet(_), Command::Dmx { .. })
                 | (Output::Sacn(_), Command::Dmx { .. })
                 | (Output::Wled(_), Command::Wled { .. })
-                | (Output::Obs(_), Command::Obs { .. } | Command::ObsMute { .. })
+                | (
+                    Output::Obs(_),
+                    Command::Obs { .. } | Command::ObsMute { .. } | Command::ObsSource { .. }
+                )
         )
     }
 }
@@ -267,9 +270,30 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         arg_value2: Option<OscArgValue>,
     },
-    Dmx { channel: u16, value: u8, universe: Option<u16> },
-    Wled { preset: String },
-    Obs { scene: String },
+    Dmx {
+        channel: u16,
+        value: u8,
+        universe: Option<u16>,
+    },
+    Wled {
+        preset: String,
+    },
+    /// Show, hide, or toggle a source in a scene.
+    ///
+    /// Must be matched before [`Command::Obs`]: a scene switch only has `scene`,
+    /// and serde would otherwise ignore `source` and `visible`.
+    /// `visible` omitted means toggle. `scene` omitted means the current program scene.
+    ObsSource {
+        source: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scene: Option<String>,
+        /// `Some(true)` shows, `Some(false)` hides, `None` toggles.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        visible: Option<bool>,
+    },
+    Obs {
+        scene: String,
+    },
     /// Mute, unmute, or toggle an OBS audio input by name.
     /// `muted` omitted means toggle.
     ObsMute {
@@ -286,6 +310,7 @@ impl Command {
             Command::Osc { .. } => "path/arg_value",
             Command::Dmx { .. } => "channel/value",
             Command::Wled { .. } => "preset",
+            Command::ObsSource { .. } => "source/visible",
             Command::Obs { .. } => "scene",
             Command::ObsMute { .. } => "input/muted",
         }
@@ -326,8 +351,8 @@ pub struct Toggle {
     #[serde(default)]
     pub is_default: bool,
     #[serde(default = "default_true")]
-    pub trigger_multiple: bool,  // If true, trigger for every multiple of the threshold (e.g., 250k triggers at 250k, 500k, 750k, etc.)
-    pub endswith_range: Option<(u8, u8)>,  // If set, only trigger when the last two digits of sats are within this range (inclusive), e.g., (0, 3) for 00-03, (10, 25) for 10-25
+    pub trigger_multiple: bool, // If true, trigger for every multiple of the threshold (e.g., 250k triggers at 250k, 500k, 750k, etc.)
+    pub endswith_range: Option<(u8, u8)>, // If set, only trigger when the last two digits of sats are within this range (inclusive), e.g., (0, 3) for 00-03, (10, 25) for 10-25
     /// Seconds to wait after this toggle fires before running `revert`.
     #[serde(default)]
     pub revert_after: Option<u64>,
@@ -354,12 +379,17 @@ impl Config {
             if self.inputs.contains_key(name) {
                 bail!(
                     "input '{}' is defined both as [{}] and [inputs.{}]",
-                    name, name, name
+                    name,
+                    name,
+                    name
                 );
             }
             self.inputs.insert(
                 name.to_string(),
-                InputConfig { enabled: true, kind },
+                InputConfig {
+                    enabled: true,
+                    kind,
+                },
             );
         }
         Ok(())
@@ -458,8 +488,8 @@ pub fn load_config() -> Result<Config> {
 
 /// Parse and validate config text. A reload uses this through `load_config`.
 pub fn parse_config(contents: &str) -> Result<Config> {
-    let mut cfg: Config = toml::from_str(contents)
-        .context("Failed to parse config file as TOML")?;
+    let mut cfg: Config =
+        toml::from_str(contents).context("Failed to parse config file as TOML")?;
     cfg.migrate_legacy_inputs()?;
     cfg.validate()?;
     Ok(cfg)
@@ -535,22 +565,39 @@ mod tests {
         let scene = cfg.resolve(&toggle.actions);
         assert_eq!(scene.len(), 3);
         assert!(scene.iter().all(|(name, _)| *name == "big_hit"));
-        assert!(matches!(scene[0].1.command, Command::Dmx { channel: 1, value: 255, universe: None }));
+        assert!(matches!(
+            scene[0].1.command,
+            Command::Dmx {
+                channel: 1,
+                value: 255,
+                universe: None
+            }
+        ));
         assert_eq!(scene[0].1.hold_ms, Some(1500));
         assert!(matches!(&scene[1].1.command, Command::Wled { preset } if preset == "BOOST-Fire"));
         assert_eq!(scene[1].1.hold_ms, None);
-        assert!(matches!(scene[2].1.command, Command::Dmx { channel: 10, value: 128, universe: Some(4) }));
+        assert!(matches!(
+            scene[2].1.command,
+            Command::Dmx {
+                channel: 10,
+                value: 128,
+                universe: Some(4)
+            }
+        ));
         assert_eq!(scene[2].1.hold_ms, Some(4000));
 
         let revert = cfg.resolve(&toggle.revert);
         assert_eq!(revert.len(), 1);
         assert_eq!(revert[0].0, "cue1");
-        assert!(matches!(&revert[0].1.command, Command::Osc { path, arg_value2: None, .. } if path == "/gma3/cmd"));
+        assert!(
+            matches!(&revert[0].1.command, Command::Osc { path, arg_value2: None, .. } if path == "/gma3/cmd")
+        );
     }
 
     #[test]
     fn osc_action_accepts_a_second_argument() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [outputs.camera]
             type = "osc"
             address = "10.0.0.244:7000"
@@ -560,7 +607,8 @@ mod tests {
             path = "/scene/switchByIndex"
             arg_value = 2
             arg_value2 = 1
-        "#);
+        "#,
+        );
         cfg.validate().unwrap();
         let action = &cfg.actions["scene2"].as_slice()[0];
         assert!(matches!(
@@ -572,7 +620,8 @@ mod tests {
 
     #[test]
     fn obs_output_and_action_parse() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [outputs.obs]
             type = "obs"
             host = "127.0.0.1"
@@ -582,7 +631,8 @@ mod tests {
             [actions.obs_cam2]
             output = "obs"
             scene = "Camera 2"
-        "#);
+        "#,
+        );
         cfg.validate().unwrap();
         assert!(matches!(
             &cfg.outputs["obs"].kind,
@@ -597,7 +647,8 @@ mod tests {
 
     #[test]
     fn obs_port_and_password_are_optional() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [outputs.obs]
             type = "obs"
             host = "127.0.0.1"
@@ -605,7 +656,8 @@ mod tests {
             [actions.obs_cam2]
             output = "obs"
             scene = "Camera 2"
-        "#);
+        "#,
+        );
         cfg.validate().unwrap();
         assert!(matches!(
             &cfg.outputs["obs"].kind,
@@ -615,7 +667,8 @@ mod tests {
 
     #[test]
     fn obs_mute_action_parses_set_and_toggle() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [outputs.obs]
             type = "obs"
             host = "127.0.0.1"
@@ -628,7 +681,8 @@ mod tests {
             [actions.mic_toggle]
             output = "obs"
             input = "Desktop Audio"
-        "#);
+        "#,
+        );
         cfg.validate().unwrap();
         let off = &cfg.actions["mic_off"].as_slice()[0];
         assert!(matches!(
@@ -643,8 +697,85 @@ mod tests {
     }
 
     #[test]
+    fn obs_source_visibility_parses_show_hide_and_toggle() {
+        let cfg = parse(
+            r#"
+            [outputs.obs]
+            type = "obs"
+            host = "127.0.0.1"
+
+            [actions.show_logo]
+            output = "obs"
+            scene = "Scene 1"
+            source = "Logo"
+            visible = true
+
+            [actions.hide_logo]
+            output = "obs"
+            source = "Logo"
+            visible = false
+
+            [actions.toggle_logo]
+            output = "obs"
+            scene = "Scene 1"
+            source = "Logo"
+
+            [actions.obs_cam2]
+            output = "obs"
+            scene = "Camera 2"
+        "#,
+        );
+        cfg.validate().unwrap();
+        let show = &cfg.actions["show_logo"].as_slice()[0];
+        assert!(matches!(
+            &show.command,
+            Command::ObsSource { source, scene: Some(scene), visible: Some(true) }
+                if source == "Logo" && scene == "Scene 1"
+        ));
+        let hide = &cfg.actions["hide_logo"].as_slice()[0];
+        assert!(matches!(
+            &hide.command,
+            Command::ObsSource { source, scene: None, visible: Some(false) } if source == "Logo"
+        ));
+        let toggle = &cfg.actions["toggle_logo"].as_slice()[0];
+        assert!(matches!(
+            &toggle.command,
+            Command::ObsSource { source, scene: Some(scene), visible: None }
+                if source == "Logo" && scene == "Scene 1"
+        ));
+        let scene = &cfg.actions["obs_cam2"].as_slice()[0];
+        assert!(matches!(&scene.command, Command::Obs { scene } if scene == "Camera 2"));
+    }
+
+    #[test]
+    fn rejects_obs_source_on_wled_output() {
+        let cfg = parse(
+            r#"
+            [outputs.strip]
+            type = "wled"
+            host = "10.0.0.20"
+            boost_playlist = "BOOST"
+            brightness = 128
+            setup = false
+            force = false
+
+            [actions.logo]
+            output = "strip"
+            source = "Logo"
+            visible = false
+        "#,
+        );
+        let err = cfg.validate().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "action 'logo': output 'strip' is wled but action has source/visible"
+        );
+    }
+
+    #[test]
     fn rejects_obs_mute_on_wled_output() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [outputs.strip]
             type = "wled"
             host = "10.0.0.20"
@@ -657,14 +788,19 @@ mod tests {
             output = "strip"
             input = "Mic/Aux"
             muted = false
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
-        assert_eq!(err, "action 'mic': output 'strip' is wled but action has input/muted");
+        assert_eq!(
+            err,
+            "action 'mic': output 'strip' is wled but action has input/muted"
+        );
     }
 
     #[test]
     fn rejects_obs_scene_on_wled_output() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [outputs.strip]
             type = "wled"
             host = "10.0.0.20"
@@ -676,25 +812,32 @@ mod tests {
             [actions.cam]
             output = "strip"
             scene = "Camera 2"
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
-        assert_eq!(err, "action 'cam': output 'strip' is wled but action has scene");
+        assert_eq!(
+            err,
+            "action 'cam': output 'strip' is wled but action has scene"
+        );
     }
 
     #[test]
     fn rejects_threshold_and_amount_on_the_same_toggle() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [[toggles]]
             threshold = 25000
             amount = 1000
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(err, "toggle #1: set threshold or amount, not both");
     }
 
     #[test]
     fn effect_toggle_parses() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [splitkit]
             url = "wss://example.com/api/live/ws"
 
@@ -711,7 +854,8 @@ mod tests {
             effect = "dj"
             revert_after = 30
             actions = ["dj_look"]
-        "#);
+        "#,
+        );
         cfg.validate().unwrap();
         assert_eq!(cfg.splitkit.unwrap().url, "wss://example.com/api/live/ws");
         let toggle = &cfg.toggles.unwrap()[0];
@@ -721,13 +865,15 @@ mod tests {
 
     #[test]
     fn rejects_effect_toggle_that_also_matches_sats() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [[toggles]]
             threshold = 1
             [[toggles]]
             effect = "dj"
             amount = 1000
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(
             err,
@@ -737,10 +883,12 @@ mod tests {
 
     #[test]
     fn rejects_unknown_effect_id() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [[toggles]]
             effect = "rainbow"
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(
             err,
@@ -750,21 +898,24 @@ mod tests {
 
     #[test]
     fn rejects_unknown_action_name() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [[toggles]]
             threshold = 1
             [[toggles]]
             threshold = 2
             [[toggles]]
             actions = ["rainbw"]
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(err, "toggle #3: unknown action 'rainbw'");
     }
 
     #[test]
     fn rejects_command_that_does_not_match_output_type() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [outputs.strip]
             type = "wled"
             host = "10.0.0.20"
@@ -777,25 +928,32 @@ mod tests {
             output = "strip"
             path = "/gma3/cmd"
             arg_value = "nope"
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
-        assert_eq!(err, "action 'rainbow': output 'strip' is wled but action has path/arg_value");
+        assert_eq!(
+            err,
+            "action 'rainbow': output 'strip' is wled but action has path/arg_value"
+        );
     }
 
     #[test]
     fn rejects_unknown_output() {
-        let cfg = parse(r#"
+        let cfg = parse(
+            r#"
             [actions.rainbow]
             output = "strip"
             preset = "BOOST-Rainbow"
-        "#);
+        "#,
+        );
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(err, "action 'rainbow': unknown output 'strip'");
     }
 
     #[test]
     fn multiple_inputs_of_the_same_type_parse() {
-        let cfg = parse_config(r#"
+        let cfg = parse_config(
+            r#"
             [inputs.show_nwc]
             type = "nwc"
             uri = "nostr+walletconnect://show"
@@ -814,27 +972,42 @@ mod tests {
             type = "boostboard"
             relay_addrs = ["wss://nos.lol"]
             pubkey = "bb"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         assert!(matches!(
             &cfg.inputs["show_nwc"].kind,
             Input::Nwc(nwc) if nwc.uri == "nostr+walletconnect://show"
         ));
         assert!(!cfg.inputs["guest_nwc"].enabled);
-        assert!(matches!(&cfg.inputs["board"].kind, Input::Boostboard(board) if board.pubkey == "aa"));
-        assert!(matches!(&cfg.inputs["other_board"].kind, Input::Boostboard(board) if board.pubkey == "bb"));
-        assert!(cfg.inputs.values().filter(|input| input.kind.type_name() == "nwc").count() == 2);
+        assert!(
+            matches!(&cfg.inputs["board"].kind, Input::Boostboard(board) if board.pubkey == "aa")
+        );
+        assert!(
+            matches!(&cfg.inputs["other_board"].kind, Input::Boostboard(board) if board.pubkey == "bb")
+        );
+        assert!(
+            cfg.inputs
+                .values()
+                .filter(|input| input.kind.type_name() == "nwc")
+                .count()
+                == 2
+        );
     }
 
     #[test]
     fn legacy_singleton_sections_migrate_into_inputs() {
-        let cfg = parse_config(r#"
+        let cfg = parse_config(
+            r#"
             [nwc]
             uri = "nostr+walletconnect://show"
 
             [splitkit]
             url = "wss://example.com/api/live/ws"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         assert!(cfg.nwc.is_none());
         assert!(cfg.splitkit.is_none());
@@ -851,14 +1024,17 @@ mod tests {
 
     #[test]
     fn rejects_legacy_section_that_duplicates_a_named_input() {
-        let err = parse_config(r#"
+        let err = parse_config(
+            r#"
             [nwc]
             uri = "nostr+walletconnect://old"
 
             [inputs.nwc]
             type = "nwc"
             uri = "nostr+walletconnect://new"
-        "#).unwrap_err();
+        "#,
+        )
+        .unwrap_err();
         let msg = format!("{:#}", err);
         assert!(
             msg.contains("input 'nwc' is defined both as [nwc] and [inputs.nwc]"),
@@ -868,7 +1044,8 @@ mod tests {
 
     #[test]
     fn rejects_input_name_that_matches_an_output() {
-        let err = parse_config(r#"
+        let err = parse_config(
+            r#"
             [inputs.lights]
             type = "nwc"
             uri = "nostr+walletconnect://show"
@@ -876,19 +1053,27 @@ mod tests {
             [outputs.lights]
             type = "osc"
             address = "10.0.0.184:8000"
-        "#).unwrap_err();
+        "#,
+        )
+        .unwrap_err();
         let msg = format!("{:#}", err);
-        assert!(msg.contains("input 'lights' uses the same name as an output"), "{msg}");
+        assert!(
+            msg.contains("input 'lights' uses the same name as an output"),
+            "{msg}"
+        );
     }
 
     #[test]
     fn rejects_reserved_input_name() {
-        let err = parse_config(r#"
+        let err = parse_config(
+            r#"
             [inputs.Effects]
             type = "zaps"
             relay_addrs = ["wss://relay.damus.io"]
             naddr = "naddr1example"
-        "#).unwrap_err();
+        "#,
+        )
+        .unwrap_err();
         let msg = format!("{:#}", err);
         assert!(msg.contains("input name 'Effects' is reserved"), "{msg}");
     }

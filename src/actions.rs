@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use rosc::OscType;
 
 use crate::config::{Command, Config, Output};
@@ -18,14 +18,20 @@ pub async fn run(config: &Config, names: &[String]) -> Result<()> {
 
     for (name, action) in resolved {
         let Some(output_cfg) = config.outputs.get(&action.output) else {
-            eprintln!("Action '{}' skipped: unknown output '{}'", name, action.output);
+            eprintln!(
+                "Action '{}' skipped: unknown output '{}'",
+                name, action.output
+            );
             last_err = Some(anyhow!("Unknown output '{}'", action.output));
             hold(name, action.hold_ms).await;
             continue;
         };
 
         if !output_cfg.enabled {
-            println!("Skipping action '{}' on disabled output '{}'", name, action.output);
+            println!(
+                "Skipping action '{}' on disabled output '{}'",
+                name, action.output
+            );
             hold(name, action.hold_ms).await;
             continue;
         }
@@ -34,7 +40,10 @@ pub async fn run(config: &Config, names: &[String]) -> Result<()> {
         match dispatch(&output_cfg.kind, &action.command).await {
             Ok(()) => sent += 1,
             Err(e) => {
-                eprintln!("Failed to run action '{}' on {}: {:#}", name, action.output, e);
+                eprintln!(
+                    "Failed to run action '{}' on {}: {:#}",
+                    name, action.output, e
+                );
                 last_err = Some(e);
             }
         }
@@ -59,25 +68,48 @@ pub fn describe(names: &[String]) -> String {
 
 async fn dispatch(kind: &Output, command: &Command) -> Result<()> {
     match (kind, command) {
-        (Output::Osc { address }, Command::Osc { path, arg_value, arg_value2 }) => {
+        (
+            Output::Osc { address },
+            Command::Osc {
+                path,
+                arg_value,
+                arg_value2,
+            },
+        ) => {
             let mut args = vec![osc_arg(arg_value)];
             if let Some(second) = arg_value2 {
                 args.push(osc_arg(second));
             }
             crate::osc::Osc::new(address)?.trigger_path(path, args)
         }
-        (Output::Artnet(cfg), Command::Dmx { channel, value, universe }) => {
-            crate::artnet::ArtNet::trigger_toggle(cfg, *channel, *value, *universe)
-        }
-        (Output::Sacn(cfg), Command::Dmx { channel, value, universe }) => {
-            crate::sacn::Sacn::trigger_toggle(cfg, *channel, *value, *universe)
-        }
+        (
+            Output::Artnet(cfg),
+            Command::Dmx {
+                channel,
+                value,
+                universe,
+            },
+        ) => crate::artnet::ArtNet::trigger_toggle(cfg, *channel, *value, *universe),
+        (
+            Output::Sacn(cfg),
+            Command::Dmx {
+                channel,
+                value,
+                universe,
+            },
+        ) => crate::sacn::Sacn::trigger_toggle(cfg, *channel, *value, *universe),
         (Output::Wled(cfg), Command::Wled { preset }) => {
             crate::wled::WLed::trigger_toggle(cfg, preset).await
         }
-        (Output::Obs(cfg), Command::Obs { scene }) => {
-            crate::obs::trigger_toggle(cfg, scene).await
-        }
+        (Output::Obs(cfg), Command::Obs { scene }) => crate::obs::trigger_toggle(cfg, scene).await,
+        (
+            Output::Obs(cfg),
+            Command::ObsSource {
+                scene,
+                source,
+                visible,
+            },
+        ) => crate::obs::trigger_visible(cfg, scene.as_deref(), source, *visible).await,
         (Output::Obs(cfg), Command::ObsMute { input, muted }) => {
             crate::obs::trigger_mute(cfg, input, *muted).await
         }
@@ -86,7 +118,9 @@ async fn dispatch(kind: &Output, command: &Command) -> Result<()> {
 }
 
 async fn hold(name: &str, hold_ms: Option<u64>) {
-    let Some(ms) = hold_ms.filter(|ms| *ms > 0) else { return };
+    let Some(ms) = hold_ms.filter(|ms| *ms > 0) else {
+        return;
+    };
     println!("Holding action '{}' for {}ms", name, ms);
     tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
 }
