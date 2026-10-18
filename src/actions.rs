@@ -1,7 +1,9 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::{anyhow, Result};
 use rosc::OscType;
 
-use crate::config::{Command, Config, Output};
+use crate::config::{Command, Config, OscArgValue, Output};
 
 /// Expand `names` and send each command to its output.
 ///
@@ -75,12 +77,22 @@ async fn dispatch(kind: &Output, command: &Command) -> Result<()> {
                 arg_value,
                 arg_value2,
             },
-        ) => {
-            let mut args = vec![osc_arg(arg_value)];
-            if let Some(second) = arg_value2 {
-                args.push(osc_arg(second));
+        ) => send_osc(address, path, arg_value, arg_value2),
+        (Output::Osc { address }, Command::RandomOsc { commands }) => {
+            if commands.is_empty() {
+                return Err(anyhow!("OSC command list is empty"));
             }
-            crate::osc::Osc::new(address)?.trigger_path(path, args)
+            let command = &commands[random_index(commands.len())];
+            println!(
+                "Picked OSC command {} {:?}",
+                command.path, command.arg_value
+            );
+            send_osc(
+                address,
+                &command.path,
+                &command.arg_value,
+                &command.arg_value2,
+            )
         }
         (
             Output::Artnet(cfg),
@@ -125,7 +137,34 @@ async fn hold(name: &str, hold_ms: Option<u64>) {
     tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
 }
 
-fn osc_arg(value: &crate::config::OscArgValue) -> OscType {
+fn send_osc(
+    address: &str,
+    path: &str,
+    arg_value: &OscArgValue,
+    arg_value2: &Option<OscArgValue>,
+) -> Result<()> {
+    let mut args = vec![osc_arg(arg_value)];
+    if let Some(second) = arg_value2 {
+        args.push(osc_arg(second));
+    }
+    crate::osc::Osc::new(address)?.trigger_path(path, args)
+}
+
+fn random_index(len: usize) -> usize {
+    static STATE: AtomicU64 = AtomicU64::new(0xA5A5_A5A5_1234_5678);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15);
+    let mut x = STATE.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed) ^ now;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+    (x as usize) % len
+}
+
+fn osc_arg(value: &OscArgValue) -> OscType {
     match value {
         crate::config::OscArgValue::String(s) => OscType::String(s.clone()),
         crate::config::OscArgValue::Int(i) => OscType::Int(*i as i32),

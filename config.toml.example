@@ -579,6 +579,18 @@ actions = ["boost0"]
 # actions = ["big_hit"]
 # revert = ["boost0"]
 
+# An action can list several OSC commands and send one of them at random.
+# [actions.random_scene]
+# output = "osc"
+# commands = [
+#   { path = "/scene/1", arg_value = 1 },
+#   { path = "/scene/2", arg_value = 1 },
+# ]
+#
+# [[toggles]]
+# is_default = true
+# actions = ["random_scene"]
+
 # Fires when SplitKit broadcasts an effect with this id. Ids are wide, dj,
 # festoons, bubbles, and mystery. Effect toggles cannot also set a threshold,
 # amount, or ending.

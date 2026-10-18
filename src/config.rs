@@ -160,7 +160,10 @@ impl Output {
     fn accepts(&self, command: &Command) -> bool {
         matches!(
             (self, command),
-            (Output::Osc { .. }, Command::Osc { .. })
+            (
+                Output::Osc { .. },
+                Command::Osc { .. } | Command::RandomOsc { .. }
+            )
                 | (Output::Artnet(_), Command::Dmx { .. })
                 | (Output::Sacn(_), Command::Dmx { .. })
                 | (Output::Wled(_), Command::Wled { .. })
@@ -245,7 +248,8 @@ pub enum OscArgValue {
     String(String),
 }
 
-/// One command sent to one output. The command fields depend on the output's type.
+/// One step sent to one output. The command fields depend on the output's type.
+/// An OSC step can list several commands in `commands` and send one of them.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Action {
     /// Name from `[outputs]`.
@@ -262,6 +266,9 @@ pub struct Action {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Command {
+    /// Send one of `commands`, chosen at random. Only valid on an OSC output.
+    /// Matched before [`Command::Osc`] so a `commands` list is not ignored.
+    RandomOsc { commands: Vec<OscCommand> },
     Osc {
         path: String,
         arg_value: OscArgValue,
@@ -303,10 +310,21 @@ pub enum Command {
     },
 }
 
+/// One OSC message. Used on its own, or as one entry in a [`Command::RandomOsc`] list.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct OscCommand {
+    pub path: String,
+    pub arg_value: OscArgValue,
+    /// Second OSC argument. Omitted commands send only `arg_value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arg_value2: Option<OscArgValue>,
+}
+
 impl Command {
     /// The fields this command was recognized by, used in config errors.
     fn shape(&self) -> &'static str {
         match self {
+            Command::RandomOsc { .. } => "commands",
             Command::Osc { .. } => "path/arg_value",
             Command::Dmx { .. } => "channel/value",
             Command::Wled { .. } => "preset",
@@ -434,6 +452,11 @@ impl Config {
                         output.kind.type_name(),
                         action.command.shape()
                     );
+                }
+                if let Command::RandomOsc { commands } = &action.command {
+                    if commands.is_empty() {
+                        bail!("action '{}': commands list is empty", name);
+                    }
                 }
             }
         }
@@ -832,6 +855,86 @@ mod tests {
         );
         let err = cfg.validate().unwrap_err().to_string();
         assert_eq!(err, "toggle #1: set threshold or amount, not both");
+    }
+
+    #[test]
+    fn random_osc_action_picks_from_its_command_list() {
+        let cfg = parse(
+            r#"
+            [outputs.camera]
+            type = "osc"
+            address = "10.0.0.244:7000"
+
+            [actions.random_camera]
+            output = "camera"
+            commands = [
+              { path = "/scene/switchByIndex", arg_value = 1 },
+              { path = "/scene/switchByIndex", arg_value = 2, arg_value2 = 0 },
+              { path = "/gma3/cmd", arg_value = "Goto Sequence 54 Cue 3" },
+            ]
+
+            [[toggles]]
+            actions = ["random_camera"]
+        "#,
+        );
+        cfg.validate().unwrap();
+        let action = &cfg.actions["random_camera"].as_slice()[0];
+        match &action.command {
+            Command::RandomOsc { commands } => {
+                assert_eq!(commands.len(), 3);
+                assert_eq!(commands[0].path, "/scene/switchByIndex");
+                assert!(matches!(commands[0].arg_value, OscArgValue::Int(1)));
+                assert!(matches!(
+                    commands[1].arg_value2,
+                    Some(OscArgValue::Int(0))
+                ));
+                assert!(matches!(commands[2].arg_value, OscArgValue::String(ref s) if s == "Goto Sequence 54 Cue 3"));
+            }
+            other => panic!("expected a command list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_empty_osc_command_list() {
+        let cfg = parse(
+            r#"
+            [outputs.camera]
+            type = "osc"
+            address = "10.0.0.244:7000"
+
+            [actions.random_camera]
+            output = "camera"
+            commands = []
+        "#,
+        );
+        let err = cfg.validate().unwrap_err().to_string();
+        assert_eq!(err, "action 'random_camera': commands list is empty");
+    }
+
+    #[test]
+    fn rejects_osc_command_list_on_wled_output() {
+        let cfg = parse(
+            r#"
+            [outputs.strip]
+            type = "wled"
+            host = "10.0.0.20"
+            boost_playlist = "BOOST"
+            brightness = 128
+            setup = false
+            force = false
+
+            [actions.random_camera]
+            output = "strip"
+            commands = [
+              { path = "/scene/switchByIndex", arg_value = 1 },
+            ]
+        "#,
+        );
+        let err = cfg.validate().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "action 'random_camera': output 'strip' is wled but action has commands"
+        );
     }
 
     #[test]
